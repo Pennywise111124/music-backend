@@ -1,0 +1,3523 @@
+@baseUrl = http://localhost:8080
+@password = 123456
+
+# ============================================================
+# CÁCH DÙNG
+# 1. Chạy A1, A2 để tạo testuser1 và testuser2 (chạy lại sẽ ra 409, bình thường).
+# 2. Vào psql/pgAdmin chạy:
+#      UPDATE users SET role = 'ADMIN' WHERE username = 'testuser1';
+# 3. Chạy TK1 (loginAdmin) và TK2 (loginUser) TRƯỚC khi chạy request cần token.
+#    Sau khi đổi role bằng SQL, phải login lại để lấy token mới.
+# 4. Chạy lần lượt từ trên xuống dưới. DB nên được reset trước khi chạy cả bộ.
+#
+# FILE TEST: tạo thư mục test-files/ cạnh file này, gồm:
+#   a.mp3, b.mp3        file mp3 hợp lệ nhỏ
+#   pixel.png, pixel2.png   ảnh png hợp lệ nhỏ
+#   notes.txt           file văn bản bất kỳ
+#   evil.exe            file bất kỳ đặt tên .exe
+#   empty.mp3           file 0 byte
+#   big.mp3             file khoảng 22MB
+#
+# LƯU Ý: POST /api/admin/songs là multipart (part "metadata" + "audio" + "cover" tùy chọn).
+# Các ca lỗi 400/404 của song: kiểm tra thêm thư mục uploads/audio KHÔNG tăng file.
+#
+# Quy ước mã test:
+#   A=Auth  TK=Token  RF=Refresh  GN=Genre  AR=Artist  AL=Album  SG=Song
+#   FV=Favorite  FL=Follow  RP=Recently played  PL=Playlist  US=Admin user  UP=Upload
+# ============================================================
+
+# ############################################################
+# PHẦN 1. AUTH
+# ############################################################
+
+### A1. Register testuser1 -> 201 (chạy lại: 409)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "testuser1", "email": "testuser1@example.com", "password": "{{password}}" }
+
+### A2. Register testuser2 (user thường) -> 201 (chạy lại: 409)
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "testuser2", "email": "testuser2@example.com", "password": "{{password}}" }
+
+### A3. Register trùng username -> 409
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "testuser1", "email": "khac@example.com", "password": "{{password}}" }
+
+### A4. Register trùng email -> 409
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "nguoikhac", "email": "testuser1@example.com", "password": "{{password}}" }
+
+### A5. Register sai format (username ngắn, email sai, password ngắn) -> 400 kèm lỗi từng field
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "ab", "email": "khong-hop-le", "password": "123" }
+
+### A6. Register thiếu hết field -> 400
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{}
+
+### A7. Login bằng username -> 200
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "testuser1", "password": "{{password}}" }
+
+### A8. Login bằng email -> 200
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "testuser1@example.com", "password": "{{password}}" }
+
+### A9. Login sai password -> 401
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "testuser1", "password": "sai-password" }
+
+### A10. Login user không tồn tại -> 401
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "khongtontai", "password": "{{password}}" }
+
+### A11. Login thiếu password -> 400
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "" }
+
+# ############################################################
+# PHẦN 2. LẤY TOKEN (chạy trước các phần cần token)
+# ############################################################
+
+### TK1. Login admin (testuser1 đã UPDATE role = ADMIN) -> 200
+# @name loginAdmin
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "testuser1", "password": "{{password}}" }
+
+### TK2. Login user thường (testuser2) -> 200
+# @name loginUser
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "testuser2", "password": "{{password}}" }
+
+# ############################################################
+# PHẦN 3. REFRESH TOKEN & KIỂM TRA TOKEN
+# ############################################################
+
+### RF1. Refresh với refreshToken hợp lệ -> 200, có accessToken mới
+# @name refreshed
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.refreshToken}}" }
+
+### RF1b. Access token MỚI từ refresh dùng gọi API -> 200 (chứng minh token sinh ra có type=access)
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{refreshed.response.body.accessToken}}
+
+### RF2. Refresh với token rác -> 401
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "day-la-mot-token-khong-hop-le" }
+
+### RF3. Refresh thiếu refreshToken -> 400
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{}
+
+### RF4. API cần đăng nhập, không có token -> 401
+GET {{baseUrl}}/api/genres
+
+### RF5. API cần đăng nhập, token rác -> 401
+GET {{baseUrl}}/api/genres
+Authorization: Bearer token.rac.khong.hop.le
+
+### RF6. Access token hợp lệ -> 200
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RF7. Dùng REFRESH token làm Bearer gọi API -> 401
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginUser.response.body.refreshToken}}
+
+### RF8. Dùng ACCESS token đổi lấy token mới ở /refresh -> 401, "Refresh token is invalid or expired"
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.accessToken}}" }
+
+### RF9. Refresh token vẫn dùng bình thường -> 200 (không bị ảnh hưởng bởi RF7, RF8)
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginUser.response.body.refreshToken}}" }
+
+### RF10. Refresh token vào endpoint admin -> 401 (không phải 403)
+GET {{baseUrl}}/api/admin/users
+Authorization: Bearer {{loginAdmin.response.body.refreshToken}}
+
+# ############################################################
+# PHẦN 4. GENRE - USER (đọc)
+# ############################################################
+
+### GN1. User xem danh sách -> 200 (rỗng nếu chưa có genre nào)
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### GN2. Không token xem danh sách -> 401
+GET {{baseUrl}}/api/genres
+
+### GN3. Lấy genre id không tồn tại -> 404
+GET {{baseUrl}}/api/genres/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### GN4. Id sai kiểu (chữ thay vì số) -> 400
+GET {{baseUrl}}/api/genres/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 5. GENRE - PHÂN QUYỀN
+# ############################################################
+
+### GN5. User thường tạo genre -> 403
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Pop" }
+
+### GN6. Không token tạo genre -> 401
+POST {{baseUrl}}/api/admin/genres
+Content-Type: application/json
+
+{ "name": "Pop" }
+
+### GN7. Token rác tạo genre -> 401
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer token.rac.khong.hop.le
+Content-Type: application/json
+
+{ "name": "Pop" }
+
+### GN8. User thường sửa genre -> 403
+PUT {{baseUrl}}/api/admin/genres/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hack" }
+
+### GN9. User thường xóa genre -> 403
+DELETE {{baseUrl}}/api/admin/genres/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 6. GENRE - ADMIN TẠO
+# ############################################################
+
+### GN10. Admin tạo "Pop" -> 201
+# @name createPop
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Pop" }
+
+### GN11. Tạo "pop" (khác hoa/thường) -> 409
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "pop" }
+
+### GN12. Tạo "  Pop  " (thừa khoảng trắng, trim rồi báo trùng) -> 409
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "  Pop  " }
+
+### GN13. Tên toàn khoảng trắng -> 400
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "   " }
+
+### GN14. Body rỗng (thiếu name) -> 400
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{}
+
+### GN15. Tên dài 110 ký tự (vượt giới hạn 100) -> 400
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+
+### GN16. Body không phải JSON -> 400
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+khong phai json
+
+### GN17. Tạo "Rock" -> 201
+# @name createRock
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Rock" }
+
+### GN18. Tạo "  Jazz  " -> 201, name trả về phải là "Jazz" (đã trim)
+# @name createJazz
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "  Jazz  " }
+
+# ############################################################
+# PHẦN 7. GENRE - ĐỌC LẠI SAU KHI TẠO
+# ############################################################
+
+### GN19. Danh sách -> 200, sắp A-Z: Jazz, Pop, Rock
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### GN20. Lấy Rock theo id -> 200
+GET {{baseUrl}}/api/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 8. GENRE - ADMIN SỬA
+# ############################################################
+
+### GN21. Đổi Rock thành "Pop" (trùng genre khác) -> 409
+PUT {{baseUrl}}/api/admin/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Pop" }
+
+### GN22. Đổi Rock thành "ROCK" (chỉ đổi hoa/thường, chính nó) -> 200
+PUT {{baseUrl}}/api/admin/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "ROCK" }
+
+### GN23. Gửi lại đúng tên hiện tại "ROCK" -> 200 (không tự báo trùng với chính mình)
+PUT {{baseUrl}}/api/admin/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "ROCK" }
+
+### GN24. Sửa tên rỗng -> 400
+PUT {{baseUrl}}/api/admin/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "" }
+
+### GN25. Sửa genre không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/genres/999999
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Blues" }
+
+### GN26. Xác nhận tên đã đổi thành "ROCK" -> 200
+GET {{baseUrl}}/api/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 9. GENRE - ADMIN XÓA
+# ############################################################
+
+### GN27. Xóa Rock -> 204
+DELETE {{baseUrl}}/api/admin/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### GN28. Xóa lại Rock -> 404
+DELETE {{baseUrl}}/api/admin/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### GN29. Rock không còn -> 404
+GET {{baseUrl}}/api/genres/{{createRock.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### GN30. Danh sách cuối cùng -> chỉ còn Jazz, Pop
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 10. ARTIST - USER (đọc)
+# ############################################################
+
+### AR1. User xem danh sách -> 200 (rỗng nếu DB đã reset)
+GET {{baseUrl}}/api/artists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR2. Không token -> 401
+GET {{baseUrl}}/api/artists
+
+### AR3. Id không tồn tại -> 404
+GET {{baseUrl}}/api/artists/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR4. Id sai kiểu -> 400
+GET {{baseUrl}}/api/artists/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 11. ARTIST - PHÂN QUYỀN
+# ############################################################
+
+### AR5. User thường tạo artist -> 403
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hacker" }
+
+### AR6. Không token tạo artist -> 401
+POST {{baseUrl}}/api/admin/artists
+Content-Type: application/json
+
+{ "name": "Hacker" }
+
+### AR7. User thường sửa -> 403
+PUT {{baseUrl}}/api/admin/artists/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hacker" }
+
+### AR8. User thường xóa -> 403
+DELETE {{baseUrl}}/api/admin/artists/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 12. ARTIST - ADMIN TẠO
+# ############################################################
+
+### AR9. Tạo "Sơn Tùng M-TP" -> 201, name đã trim, popularity 0, imageUrl null (JSON không còn nhận imageUrl, ảnh upload ở phần UP)
+# @name createSon
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "  Sơn Tùng M-TP  ", "info": "Ca sĩ, nhạc sĩ Việt Nam." }
+
+### AR10. Tạo chỉ có name -> 201, imageUrl và info là null
+# @name createDen
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Đen Vâu" }
+
+### AR11. Cố tình gửi popularity = 9999 -> 201 nhưng popularity vẫn phải là 0
+# @name createHieu
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hieuthuhai", "popularity": 9999 }
+
+### AR12. Tạo trùng tên "Đen Vâu" -> 201 (cho phép trùng tên)
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Đen Vâu" }
+
+### AR13. Name toàn khoảng trắng -> 400
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "   " }
+
+### AR14. Thiếu name -> 400
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "info": "Không có tên" }
+
+### AR15. Name dài 300 ký tự -> 400 (Name max 255 chars)
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+
+### AR16. Body không phải JSON -> 400
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+khong phai json
+
+# ############################################################
+# PHẦN 13. ARTIST - ĐỌC LẠI, TÌM KIẾM, TOP
+# ############################################################
+
+### AR17. Danh sách -> 200, 4 artist A-Z: Đen Vâu, Đen Vâu, Hieuthuhai, Sơn Tùng M-TP
+GET {{baseUrl}}/api/artists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR18. Lấy Sơn Tùng theo id -> 200, name đã trim
+GET {{baseUrl}}/api/artists/{{createSon.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR19. Tìm "đen" (không phân biệt hoa/thường) -> 200, ra 2 "Đen Vâu"
+GET {{baseUrl}}/api/artists?query=đen
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR20. Tìm "zzzz" -> 200, mảng rỗng
+GET {{baseUrl}}/api/artists?query=zzzz
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR21. query rỗng -> 200, trả toàn bộ (4) như không lọc
+GET {{baseUrl}}/api/artists?query=
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR22. Top mặc định -> 200 (popularity đều 0 nên theo tên A-Z, cùng thứ tự AR17)
+GET {{baseUrl}}/api/artists/top
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR23. Top limit=2 -> 200, đúng 2 phần tử
+GET {{baseUrl}}/api/artists/top?limit=2
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR24. Top limit=0 -> 200, bị kẹp thành 1 phần tử (không lỗi)
+GET {{baseUrl}}/api/artists/top?limit=0
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR25. Top limit=-5 -> 200, bị kẹp thành 1 phần tử
+GET {{baseUrl}}/api/artists/top?limit=-5
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AR26. Top limit=abc -> 400
+GET {{baseUrl}}/api/artists/top?limit=abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 14. ARTIST - ADMIN SỬA
+# ############################################################
+
+### AR27. Sửa Sơn Tùng -> 200, info "Đã cập nhật tiểu sử.", imageUrl null
+PUT {{baseUrl}}/api/admin/artists/{{createSon.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Sơn Tùng M-TP", "info": "Đã cập nhật tiểu sử." }
+
+### AR28. Sửa và gửi popularity = 5000 -> 200, popularity KHÔNG đổi (vẫn 0), info null, imageUrl null
+PUT {{baseUrl}}/api/admin/artists/{{createSon.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Sơn Tùng M-TP", "popularity": 5000 }
+
+### AR29. Sửa tên rỗng -> 400
+PUT {{baseUrl}}/api/admin/artists/{{createSon.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "" }
+
+### AR30. Sửa artist không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/artists/999999
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Ma" }
+
+# ############################################################
+# PHẦN 15. ARTIST - ADMIN XÓA
+# ############################################################
+
+### AR31. Xóa Hieuthuhai -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{createHieu.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AR32. Xóa lại -> 404
+DELETE {{baseUrl}}/api/admin/artists/{{createHieu.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AR33. Đọc lại artist đã xóa -> 404
+GET {{baseUrl}}/api/artists/{{createHieu.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 16. ALBUM - CHUẨN BỊ (2 artist riêng cho test album)
+# ############################################################
+
+### AL0a. Tạo artist A -> 201
+# @name albumArtistA
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Album Artist A" }
+
+### AL0b. Tạo artist B -> 201
+# @name albumArtistB
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Album Artist B" }
+
+# ############################################################
+# PHẦN 17. ALBUM - USER (đọc)
+# ############################################################
+
+### AL1. User xem danh sách -> 200 (rỗng nếu chưa có album)
+GET {{baseUrl}}/api/albums
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL2. Không token -> 401
+GET {{baseUrl}}/api/albums
+
+### AL3. Id không tồn tại -> 404
+GET {{baseUrl}}/api/albums/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL4. Id sai kiểu -> 400
+GET {{baseUrl}}/api/albums/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 18. ALBUM - PHÂN QUYỀN
+# ############################################################
+
+### AL5. User thường tạo album -> 403
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL6. Không token tạo album -> 401
+POST {{baseUrl}}/api/admin/albums
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL7. User thường sửa -> 403
+PUT {{baseUrl}}/api/admin/albums/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL8. User thường xóa -> 403
+DELETE {{baseUrl}}/api/admin/albums/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 19. ALBUM - ADMIN TẠO
+# ############################################################
+
+### AL9. Tạo đầy đủ field, title thừa khoảng trắng -> 201, title đã trim, có artistName, imageUrl null
+# @name createAlbum1
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "  Sky Tour  ", "artistId": {{albumArtistA.response.body.id}}, "releaseDate": "2024-06-05" }
+
+### AL10. Chỉ title + artistId -> 201, releaseDate và imageUrl là null
+# @name createAlbum2
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Demo Tape", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL11. Trùng title với album khác (cùng artist) -> 201 (cho phép trùng)
+# @name createAlbum3
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Sky Tour", "artistId": {{albumArtistA.response.body.id}}, "releaseDate": "2023-01-01" }
+
+### AL12. Thiếu artistId -> 400 (Artist id is required)
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "No Artist" }
+
+### AL13. artistId không tồn tại -> 404
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Ghost", "artistId": 999999 }
+
+### AL14. artistId sai kiểu (chuỗi) -> 400
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Bad Id", "artistId": "abc" }
+
+### AL15. Title toàn khoảng trắng -> 400
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "   ", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL16. Thiếu title -> 400
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "artistId": {{albumArtistA.response.body.id}} }
+
+### AL17. Title dài 270 ký tự -> 400 (Title max 255 chars)
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL18. releaseDate sai định dạng (dd/MM/yyyy) -> 400
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Bad Date", "artistId": {{albumArtistA.response.body.id}}, "releaseDate": "05/06/2024" }
+
+### AL19. releaseDate không tồn tại (30/02) -> 400
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Bad Date 2", "artistId": {{albumArtistA.response.body.id}}, "releaseDate": "2024-02-30" }
+
+### AL20. Body không phải JSON -> 400
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+khong phai json
+
+# ############################################################
+# PHẦN 20. ALBUM - ĐỌC LẠI, TÌM KIẾM, THEO ARTIST
+# ############################################################
+
+### AL21. Danh sách -> 200, sắp theo title A-Z (Demo Tape, Sky Tour, Sky Tour)
+GET {{baseUrl}}/api/albums
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL22. Lấy album 1 theo id -> 200, title "Sky Tour", artistName "Album Artist A"
+GET {{baseUrl}}/api/albums/{{createAlbum1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL23. Tìm "sky" (không phân biệt hoa/thường) -> 200, 2 phần tử
+GET {{baseUrl}}/api/albums?query=sky
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL24. Tìm "zzzz" -> 200, mảng rỗng
+GET {{baseUrl}}/api/albums?query=zzzz
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL25. query rỗng -> 200, trả toàn bộ
+GET {{baseUrl}}/api/albums?query=
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL26. Album của artist A -> 200, 3 phần tử, thứ tự: Sky Tour 2024, Sky Tour 2023, Demo Tape (không ngày, xếp cuối)
+GET {{baseUrl}}/api/albums/by-artist/{{albumArtistA.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL27. Album của artist B (chưa có) -> 200, mảng rỗng
+GET {{baseUrl}}/api/albums/by-artist/{{albumArtistB.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL28. Album của artist không tồn tại -> 404
+GET {{baseUrl}}/api/albums/by-artist/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL29. by-artist sai kiểu -> 400
+GET {{baseUrl}}/api/albums/by-artist/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 21. ALBUM - ADMIN SỬA
+# ############################################################
+
+### AL30. Sửa album 1: đổi title, chuyển sang artist B -> 200, artistName "Album Artist B", imageUrl null
+PUT {{baseUrl}}/api/admin/albums/{{createAlbum1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Sky Tour Deluxe", "artistId": {{albumArtistB.response.body.id}}, "releaseDate": "2024-06-05" }
+
+### AL31. Xác nhận artist B có 1 album (artist A còn 2)
+GET {{baseUrl}}/api/albums/by-artist/{{albumArtistB.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL32. Sửa với artistId không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/albums/{{createAlbum1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X", "artistId": 999999 }
+
+### AL33. Sửa album không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/albums/999999
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X", "artistId": {{albumArtistA.response.body.id}} }
+
+### AL34. Sửa title rỗng -> 400
+PUT {{baseUrl}}/api/admin/albums/{{createAlbum1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "", "artistId": {{albumArtistB.response.body.id}} }
+
+### AL35. Sửa thiếu artistId -> 400
+PUT {{baseUrl}}/api/admin/albums/{{createAlbum1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X" }
+
+# ############################################################
+# PHẦN 22. ALBUM - XÓA & RÀNG BUỘC VỚI ARTIST
+# ############################################################
+
+### AL36. Xóa artist A khi còn album (Demo Tape, Sky Tour) -> 409
+DELETE {{baseUrl}}/api/admin/artists/{{albumArtistA.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL37. Xóa album 2 -> 204
+DELETE {{baseUrl}}/api/admin/albums/{{createAlbum2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL38. Xóa lại album 2 -> 404
+DELETE {{baseUrl}}/api/admin/albums/{{createAlbum2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL39. Đọc album 2 đã xóa -> 404
+GET {{baseUrl}}/api/albums/{{createAlbum2.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### AL40. Xóa album 3 -> 204 (artist A hết album)
+DELETE {{baseUrl}}/api/admin/albums/{{createAlbum3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL41. Xóa artist A (đã hết album) -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{albumArtistA.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL42. Xóa artist B khi còn album 1 -> 409
+DELETE {{baseUrl}}/api/admin/artists/{{albumArtistB.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL43. Xóa album 1 -> 204
+DELETE {{baseUrl}}/api/admin/albums/{{createAlbum1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### AL44. Xóa artist B (đã hết album) -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{albumArtistB.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 23. SONG - CHUẨN BỊ
+# ############################################################
+
+### SG0a. Artist X -> 201
+# @name songArtistX
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Song Artist X" }
+
+### SG0b. Artist Y -> 201
+# @name songArtistY
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Song Artist Y" }
+
+### SG0c. Artist Z (không có bài hát nào) -> 201
+# @name songArtistZ
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Song Artist Z" }
+
+### SG0d. Album AX thuộc artist X -> 201
+# @name songAlbumAX
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "AX Album", "artistId": {{songArtistX.response.body.id}} }
+
+### SG0e. Album AY thuộc artist Y -> 201
+# @name songAlbumAY
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "AY Album", "artistId": {{songArtistY.response.body.id}} }
+
+### SG0f. Genre -> 201 (nếu 409 thì genre tên này còn sót từ lần chạy trước, xóa tay rồi chạy lại)
+# @name songGenre
+POST {{baseUrl}}/api/admin/genres
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Song Test Genre" }
+
+# ############################################################
+# PHẦN 24. SONG - USER (đọc, khi chưa có dữ liệu)
+# ############################################################
+
+### SG1. Danh sách -> 200, content [], totalElements 0
+GET {{baseUrl}}/api/songs
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG2. Không token -> 401
+GET {{baseUrl}}/api/songs
+
+### SG3. Id không tồn tại -> 404
+GET {{baseUrl}}/api/songs/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG4. Id sai kiểu -> 400
+GET {{baseUrl}}/api/songs/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 25. SONG - PHÂN QUYỀN
+# ############################################################
+
+### SG5. User thường tạo song -> 403
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG6. Không token tạo song -> 401
+POST {{baseUrl}}/api/admin/songs
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG7. User thường sửa -> 403
+PUT {{baseUrl}}/api/admin/songs/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+
+### SG8. User thường xóa -> 403
+DELETE {{baseUrl}}/api/admin/songs/1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 26. SONG - ADMIN TẠO (multipart)
+# ############################################################
+
+### SG9. Đầy đủ field + audio + cover, title thừa khoảng trắng -> 201, title "Sky Song", audioUrl /api/files/audio/<uuid>.mp3, imageUrl /api/files/images/<uuid>.png, có artistName/albumTitle/genreName, createdAt
+# @name createSong1
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "  Sky Song  ", "artistId": {{songArtistX.response.body.id}}, "albumId": {{songAlbumAX.response.body.id}}, "genreId": {{songGenre.response.body.id}}, "durationMs": 215000, "releaseDate": "2024-06-05" }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB
+Content-Disposition: form-data; name="cover"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### SG10. Chỉ field bắt buộc + audio -> 201, imageUrl null, albumId/genreId/releaseDate null, có audioUrl
+# @name createSong2
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Alpha Track", "artistId": {{songArtistX.response.body.id}}, "durationMs": 180000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG11. Song của artist Y trong album AY, không genre -> 201, imageUrl null
+# @name createSong3
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Sky Anthem", "artistId": {{songArtistY.response.body.id}}, "albumId": {{songAlbumAY.response.body.id}}, "durationMs": 200000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG12. Thiếu artistId -> 400 (Artist id is required)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "No Artist", "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG13. artistId không tồn tại -> 404
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Ghost", "artistId": 999999, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG14. albumId không tồn tại -> 404
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Ghost", "artistId": {{songArtistX.response.body.id}}, "albumId": 999999, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG15. genreId không tồn tại -> 404
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Ghost", "artistId": {{songArtistX.response.body.id}}, "genreId": 999999, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG16. Album của artist Y nhưng song của artist X -> 400 (album không thuộc artist)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Mismatch", "artistId": {{songArtistX.response.body.id}}, "albumId": {{songAlbumAY.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG17. Thiếu title -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG18. Title toàn khoảng trắng -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "   ", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG19. Thiếu part audio -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "No Audio", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+--UpB--
+
+### SG20. durationMs = 0 -> 400 (Duration must be greater than 0)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Zero", "artistId": {{songArtistX.response.body.id}}, "durationMs": 0 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG21. durationMs âm -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Negative", "artistId": {{songArtistX.response.body.id}}, "durationMs": -5 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG22. Thiếu durationMs -> 400 (Duration is required)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "No Duration", "artistId": {{songArtistX.response.body.id}} }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG23. Title dài 300 ký tự -> 400 (Title max 255 chars)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG24. releaseDate sai định dạng -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Bad Date", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000, "releaseDate": "05/06/2024" }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### SG25. Part metadata không phải JSON -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+khong phai json
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+# ############################################################
+# PHẦN 27. SONG - ĐỌC, TÌM KIẾM, PHÂN TRANG
+# ############################################################
+
+### SG26. Danh sách -> 200, totalElements 3, thứ tự: Alpha Track, Sky Anthem, Sky Song
+GET {{baseUrl}}/api/songs
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG27. Lấy song 1 theo id -> 200, title "Sky Song", artistName "Song Artist X"
+GET {{baseUrl}}/api/songs/{{createSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG28. Tìm "SKY" (không phân biệt hoa/thường) -> 200, 2 phần tử: Sky Anthem, Sky Song
+GET {{baseUrl}}/api/songs?query=SKY
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG29. Tìm "zzzz" -> 200, content rỗng, totalElements 0
+GET {{baseUrl}}/api/songs?query=zzzz
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG30. query rỗng -> 200, trả toàn bộ (3)
+GET {{baseUrl}}/api/songs?query=
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG31. page=0&size=2 -> 200, 2 phần tử, totalElements 3, totalPages 2
+GET {{baseUrl}}/api/songs?page=0&size=2
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG32. page=1&size=2 -> 200, 1 phần tử (Sky Song)
+GET {{baseUrl}}/api/songs?page=1&size=2
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG33. size=0 -> 200, bị kẹp thành size 1, content 1 phần tử
+GET {{baseUrl}}/api/songs?size=0
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG34. size=1000 -> 200, bị kẹp thành size 50, content 3 phần tử
+GET {{baseUrl}}/api/songs?size=1000
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG35. page=-1 -> 200, bị kẹp thành page 0
+GET {{baseUrl}}/api/songs?page=-1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG36. size=abc -> 400
+GET {{baseUrl}}/api/songs?size=abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG37. Bài của artist X -> 200, 2 phần tử: Alpha Track, Sky Song
+GET {{baseUrl}}/api/songs/by-artist/{{songArtistX.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG38. Bài của artist Z (chưa có) -> 200, mảng rỗng
+GET {{baseUrl}}/api/songs/by-artist/{{songArtistZ.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG39. by-artist không tồn tại -> 404
+GET {{baseUrl}}/api/songs/by-artist/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG40. by-artist sai kiểu -> 400
+GET {{baseUrl}}/api/songs/by-artist/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG41. Bài của album AX -> 200, 1 phần tử: Sky Song
+GET {{baseUrl}}/api/songs/by-album/{{songAlbumAX.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG42. by-album không tồn tại -> 404
+GET {{baseUrl}}/api/songs/by-album/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 28. SONG - ADMIN SỬA (JSON, chỉ metadata; audio/cover đổi ở phần UP)
+# ############################################################
+
+### SG43. Sửa song 1: đổi title và duration, giữ artist/album/genre -> 200, title "Sky Song Deluxe", duration 220000, audioUrl và imageUrl GIỮ NGUYÊN, releaseDate về null (PUT thay thế toàn bộ)
+PUT {{baseUrl}}/api/admin/songs/{{createSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Sky Song Deluxe", "artistId": {{songArtistX.response.body.id}}, "albumId": {{songAlbumAX.response.body.id}}, "genreId": {{songGenre.response.body.id}}, "durationMs": 220000 }
+
+### SG44. Sửa song 2 gán album của artist khác -> 400
+PUT {{baseUrl}}/api/admin/songs/{{createSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Alpha Track", "artistId": {{songArtistX.response.body.id}}, "albumId": {{songAlbumAY.response.body.id}}, "durationMs": 180000 }
+
+### SG45. Sửa với artistId không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/songs/{{createSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X", "artistId": 999999, "durationMs": 1000 }
+
+### SG46. Sửa với albumId không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/songs/{{createSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X", "artistId": {{songArtistX.response.body.id}}, "albumId": 999999, "durationMs": 1000 }
+
+### SG47. Sửa với genreId không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/songs/{{createSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X", "artistId": {{songArtistX.response.body.id}}, "genreId": 999999, "durationMs": 1000 }
+
+### SG48. Sửa song không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/songs/999999
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "X", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+
+### SG49. Sửa title rỗng -> 400
+PUT {{baseUrl}}/api/admin/songs/{{createSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "", "artistId": {{songArtistX.response.body.id}}, "durationMs": 1000 }
+
+### SG50. Sửa song 3, không gửi albumId -> 200, albumId/albumTitle null (PUT thay thế toàn bộ), audioUrl giữ nguyên
+PUT {{baseUrl}}/api/admin/songs/{{createSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Sky Anthem", "artistId": {{songArtistY.response.body.id}}, "durationMs": 200000 }
+
+# ############################################################
+# PHẦN 29. SONG - RÀNG BUỘC VỚI GENRE / ALBUM / ARTIST
+# ############################################################
+
+### SG51. Xóa genre đang có song 1 dùng -> 409
+DELETE {{baseUrl}}/api/admin/genres/{{songGenre.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG52. Xóa album AX khi còn song 1 -> 409
+DELETE {{baseUrl}}/api/admin/albums/{{songAlbumAX.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG53. Xóa artist X khi còn song -> 409
+DELETE {{baseUrl}}/api/admin/artists/{{songArtistX.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG54. Xóa artist Y khi còn song 3 -> 409
+DELETE {{baseUrl}}/api/admin/artists/{{songArtistY.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG55. Chuyển album AX sang artist Y khi còn song 1 -> 409
+PUT {{baseUrl}}/api/admin/albums/{{songAlbumAX.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "AX Album", "artistId": {{songArtistY.response.body.id}} }
+
+### SG56. Chỉ đổi title album AX, giữ artist X -> 200
+PUT {{baseUrl}}/api/admin/albums/{{songAlbumAX.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "AX Album Renamed", "artistId": {{songArtistX.response.body.id}} }
+
+# ############################################################
+# PHẦN 30. SONG - XÓA VÀ DỌN DẸP
+# ############################################################
+
+### SG57. Xóa song 1 -> 204, file audio và cover bị xóa khỏi uploads/
+DELETE {{baseUrl}}/api/admin/songs/{{createSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG58. Xóa lại song 1 -> 404
+DELETE {{baseUrl}}/api/admin/songs/{{createSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG59. Đọc song 1 đã xóa -> 404
+GET {{baseUrl}}/api/songs/{{createSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### SG60. Xóa genre (không còn song nào dùng) -> 204
+DELETE {{baseUrl}}/api/admin/genres/{{songGenre.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG61. Xóa song 2 -> 204, file audio bị xóa khỏi uploads/
+DELETE {{baseUrl}}/api/admin/songs/{{createSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG62. Xóa song 3 -> 204, file audio bị xóa khỏi uploads/
+DELETE {{baseUrl}}/api/admin/songs/{{createSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG63. Xóa album AX -> 204
+DELETE {{baseUrl}}/api/admin/albums/{{songAlbumAX.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG64. Xóa album AY -> 204
+DELETE {{baseUrl}}/api/admin/albums/{{songAlbumAY.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG65. Xóa artist X -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{songArtistX.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG66. Xóa artist Y -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{songArtistY.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### SG67. Xóa artist Z -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{songArtistZ.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 31. FAVORITE - CHUẨN BỊ
+# ############################################################
+
+### FV0a. Artist -> 201
+# @name favArtist
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Fav Artist" }
+
+### FV0b. Song Alpha -> 201
+# @name favSong1
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Fav Alpha", "artistId": {{favArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### FV0c. Song Beta -> 201
+# @name favSong2
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Fav Beta", "artistId": {{favArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### FV0d. Song Gamma -> 201
+# @name favSong3
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Fav Gamma", "artistId": {{favArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+# ############################################################
+# PHẦN 32. FAVORITE - XÁC THỰC VÀ THÊM
+# ############################################################
+
+### FV1. User xem danh sách khi chưa yêu thích gì -> 200, content [], totalElements 0
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV2. Không token xem danh sách -> 401
+GET {{baseUrl}}/api/favorites
+
+### FV3. Không token thêm -> 401
+POST {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+
+### FV4. User thêm Alpha -> 204
+POST {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV5. User thêm Beta -> 204
+POST {{baseUrl}}/api/favorites/{{favSong2.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV6. User thêm lại Alpha -> 204 (idempotent, không lỗi, không tạo dòng thứ 2)
+POST {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV7. Thêm song không tồn tại -> 404
+POST {{baseUrl}}/api/favorites/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV8. songId sai kiểu -> 400
+POST {{baseUrl}}/api/favorites/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 33. FAVORITE - ĐỌC, TÁCH BIỆT GIỮA CÁC USER, PHÂN TRANG
+# ############################################################
+
+### FV9. Danh sách của user -> 200, totalElements 2, thứ tự: Fav Beta, Fav Alpha (mới thêm trước)
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV10. Danh sách của admin -> 200, rỗng (không thấy favorite của user)
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV11. Admin thêm Gamma -> 204
+POST {{baseUrl}}/api/favorites/{{favSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV12. Danh sách user vẫn 2 bài, không có Gamma -> 200
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV13. page=0&size=1 -> 200, 1 phần tử (Fav Beta), totalElements 2, totalPages 2
+GET {{baseUrl}}/api/favorites?page=0&size=1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV14. page=1&size=1 -> 200, 1 phần tử (Fav Alpha)
+GET {{baseUrl}}/api/favorites?page=1&size=1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV15. size=0 -> 200, bị kẹp size 1
+GET {{baseUrl}}/api/favorites?size=0
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV16. size=1000 -> 200, bị kẹp size 50
+GET {{baseUrl}}/api/favorites?size=1000
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV17. page=-1 -> 200, bị kẹp page 0
+GET {{baseUrl}}/api/favorites?page=-1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV18. size=abc -> 400
+GET {{baseUrl}}/api/favorites?size=abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 34. FAVORITE - BỎ YÊU THÍCH
+# ############################################################
+
+### FV19. Không token xóa -> 401
+DELETE {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+
+### FV20. User bỏ Alpha -> 204
+DELETE {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV21. Bỏ lại Alpha -> 204 (idempotent)
+DELETE {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV22. User bỏ Gamma (mình chưa từng yêu thích, admin mới yêu thích) -> 204, và KHÔNG được xóa favorite của admin
+DELETE {{baseUrl}}/api/favorites/{{favSong3.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV23. Bỏ song không tồn tại -> 204
+DELETE {{baseUrl}}/api/favorites/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV24. songId sai kiểu -> 400
+DELETE {{baseUrl}}/api/favorites/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV25. Danh sách user -> 200, còn 1 bài: Fav Beta
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV26. Danh sách admin -> 200, vẫn còn Fav Gamma (FV22 không ảnh hưởng admin)
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV27. Thêm lại Alpha sau khi đã bỏ -> 204
+POST {{baseUrl}}/api/favorites/{{favSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV28. Danh sách user -> 200, 2 bài, Fav Alpha lên đầu (vừa thêm lại)
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 35. FAVORITE - XÓA SONG CÓ NGƯỜI YÊU THÍCH VÀ DỌN DẸP
+# ############################################################
+
+### FV29. Admin xóa Beta (user đang yêu thích) -> 204, KHÔNG được ra 409/500
+DELETE {{baseUrl}}/api/admin/songs/{{favSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV30. Danh sách user -> 200, chỉ còn Fav Alpha (favorite của Beta đã bị dọn)
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV31. Admin xóa Gamma (admin đang yêu thích) -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{favSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV32. Danh sách admin -> 200, rỗng
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV33. Admin xóa Alpha -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{favSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FV34. Danh sách user -> 200, rỗng
+GET {{baseUrl}}/api/favorites
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FV35. Xóa artist -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{favArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 36. FOLLOW - CHUẨN BỊ
+# ############################################################
+
+### FL0a. Artist P -> 201
+# @name flP
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Follow Artist P" }
+
+### FL0b. Artist Q -> 201
+# @name flQ
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Follow Artist Q" }
+
+### FL0c. Artist R -> 201
+# @name flR
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Follow Artist R" }
+
+# ############################################################
+# PHẦN 37. FOLLOW - XÁC THỰC VÀ THEO DÕI
+# ############################################################
+
+### FL1. User xem danh sách theo dõi lúc đầu -> 200, content [], totalElements 0
+GET {{baseUrl}}/api/artists/followed
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL2. Không token xem danh sách -> 401
+GET {{baseUrl}}/api/artists/followed
+
+### FL3. Không token follow -> 401
+POST {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+
+### FL4. User follow P -> 204
+POST {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL5. User follow P lần nữa -> 204 (idempotent, popularity KHÔNG tăng thêm)
+POST {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL6. User xem P -> 200, popularity 1, followed true
+GET {{baseUrl}}/api/artists/{{flP.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL7. Admin xem P -> 200, popularity 1, followed false (admin chưa follow)
+GET {{baseUrl}}/api/artists/{{flP.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL8. Admin follow P -> 204
+POST {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL9. User xem P -> 200, popularity 2, followed true
+GET {{baseUrl}}/api/artists/{{flP.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL10. User follow Q -> 204
+POST {{baseUrl}}/api/artists/{{flQ.response.body.id}}/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL11. Follow artist không tồn tại -> 404
+POST {{baseUrl}}/api/artists/999999/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL12. id sai kiểu -> 400
+POST {{baseUrl}}/api/artists/abc/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 38. FOLLOW - ĐỌC, TOP, PHÂN TRANG
+# ############################################################
+
+### FL13. Tìm "Follow Artist" -> 200, P (followed true, popularity 2), Q (true, 1), R (false, 0)
+GET {{baseUrl}}/api/artists?query=Follow%20Artist
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL14. Top 2 -> 200, thứ tự P (2), Q (1); P và Q đều followed true
+GET {{baseUrl}}/api/artists/top?limit=2
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL15. Danh sách theo dõi của user -> 200, totalElements 2, thứ tự Q rồi P (mới follow trước), followed true
+GET {{baseUrl}}/api/artists/followed
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL16. Danh sách theo dõi của admin -> 200, chỉ có P
+GET {{baseUrl}}/api/artists/followed
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL17. page=0&size=1 -> 200, 1 phần tử (Q), totalElements 2, totalPages 2
+GET {{baseUrl}}/api/artists/followed?page=0&size=1
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL18. size=abc -> 400
+GET {{baseUrl}}/api/artists/followed?size=abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 39. FOLLOW - BỎ THEO DÕI
+# ############################################################
+
+### FL19. Không token bỏ theo dõi -> 401
+DELETE {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+
+### FL20. User bỏ theo dõi P -> 204
+DELETE {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL21. Bỏ lần nữa -> 204 (idempotent, popularity KHÔNG giảm thêm)
+DELETE {{baseUrl}}/api/artists/{{flP.response.body.id}}/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL22. Admin xem P -> 200, popularity 1 (còn admin), followed true
+GET {{baseUrl}}/api/artists/{{flP.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL23. User bỏ theo dõi R (chưa từng follow) -> 204
+DELETE {{baseUrl}}/api/artists/{{flR.response.body.id}}/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL24. Xem R -> 200, popularity 0 (không âm)
+GET {{baseUrl}}/api/artists/{{flR.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL25. Bỏ theo dõi artist không tồn tại -> 204
+DELETE {{baseUrl}}/api/artists/999999/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL26. id sai kiểu -> 400
+DELETE {{baseUrl}}/api/artists/abc/follow
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL27. Danh sách theo dõi của user -> 200, chỉ còn Q
+GET {{baseUrl}}/api/artists/followed
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 40. FOLLOW - ADMIN SỬA, XÓA ARTIST CÓ NGƯỜI THEO DÕI, DỌN DẸP
+# ############################################################
+
+### FL28. Admin sửa tên P -> 200, popularity VẪN 1, followed false (response của admin)
+PUT {{baseUrl}}/api/admin/artists/{{flP.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Follow Artist P2" }
+
+### FL29. Admin xóa P (admin đang follow) -> 204, KHÔNG được ra 409/500
+DELETE {{baseUrl}}/api/admin/artists/{{flP.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL30. Danh sách theo dõi của admin -> 200, rỗng
+GET {{baseUrl}}/api/artists/followed
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL31. Admin xóa Q (user đang follow) -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{flQ.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### FL32. Danh sách theo dõi của user -> 200, rỗng
+GET {{baseUrl}}/api/artists/followed
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### FL33. Admin xóa R -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{flR.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 41. RECENTLY PLAYED - CHUẨN BỊ
+# ############################################################
+
+### RP0a. Artist -> 201
+# @name rpArtist
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "RP Artist" }
+
+### RP0b. Song 1 -> 201
+# @name rpSong1
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "RP One", "artistId": {{rpArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### RP0c. Song 2 -> 201
+# @name rpSong2
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "RP Two", "artistId": {{rpArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### RP0d. Song 3 -> 201
+# @name rpSong3
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "RP Three", "artistId": {{rpArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+# ############################################################
+# PHẦN 42. RECENTLY PLAYED - XÁC THỰC VÀ GHI NHẬN
+# ############################################################
+
+### RP1. User xem lịch sử lúc đầu -> 200, mảng rỗng
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP2. Không token xem -> 401
+GET {{baseUrl}}/api/recently-played
+
+### RP3. Không token ghi nhận -> 401
+POST {{baseUrl}}/api/recently-played/{{rpSong1.response.body.id}}
+
+### RP4. User nghe song 1 -> 204
+POST {{baseUrl}}/api/recently-played/{{rpSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP5. User nghe song 2 -> 204
+POST {{baseUrl}}/api/recently-played/{{rpSong2.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP6. User nghe song 3 -> 204
+POST {{baseUrl}}/api/recently-played/{{rpSong3.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP7. Lịch sử -> 200, 3 phần tử, thứ tự: RP Three, RP Two, RP One
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP8. User nghe lại song 1 -> 204
+POST {{baseUrl}}/api/recently-played/{{rpSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP9. Lịch sử -> 200, vẫn 3 phần tử (không trùng), thứ tự: RP One, RP Three, RP Two
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP10. Song không tồn tại -> 404
+POST {{baseUrl}}/api/recently-played/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP11. songId sai kiểu -> 400
+POST {{baseUrl}}/api/recently-played/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 43. RECENTLY PLAYED - TÁCH BIỆT GIỮA CÁC USER
+# ############################################################
+
+### RP12. Lịch sử của admin -> 200, mảng rỗng (không thấy của user)
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP13. Admin nghe song 2 -> 204
+POST {{baseUrl}}/api/recently-played/{{rpSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP14. Lịch sử của user -> 200, vẫn 3 phần tử, thứ tự không đổi (RP One, RP Three, RP Two)
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP15. Lịch sử của admin -> 200, chỉ RP Two
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 44. RECENTLY PLAYED - XÓA LỊCH SỬ
+# ############################################################
+
+### RP16. Không token xóa -> 401
+DELETE {{baseUrl}}/api/recently-played
+
+### RP17. User xóa lịch sử -> 204
+DELETE {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP18. Lịch sử của user -> 200, rỗng
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP19. Lịch sử của admin -> 200, vẫn còn RP Two (RP17 không xóa nhầm của admin)
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP20. User xóa lại khi đã rỗng -> 204 (idempotent)
+DELETE {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP21. User nghe lại song 1 -> 204
+POST {{baseUrl}}/api/recently-played/{{rpSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 45. RECENTLY PLAYED - XÓA SONG CÓ TRONG LỊCH SỬ VÀ DỌN DẸP
+# ############################################################
+
+### RP22. Admin xóa song 1 (user đang có trong lịch sử) -> 204, KHÔNG được ra 409/500
+DELETE {{baseUrl}}/api/admin/songs/{{rpSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP23. Lịch sử của user -> 200, rỗng (đã dọn theo song)
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### RP24. Admin xóa song 2 (admin đang có trong lịch sử) -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{rpSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP25. Lịch sử của admin -> 200, rỗng
+GET {{baseUrl}}/api/recently-played
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP26. Admin xóa song 3 -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{rpSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### RP27. Admin xóa artist -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{rpArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 46. PLAYLIST - CHUẨN BỊ
+# ############################################################
+
+### PL0a. Artist -> 201
+# @name plArtist
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "PL Artist" }
+
+### PL0b. Song 1 -> 201
+# @name plSong1
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "PL One", "artistId": {{plArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### PL0c. Song 2 -> 201
+# @name plSong2
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "PL Two", "artistId": {{plArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### PL0d. Song 3 -> 201
+# @name plSong3
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "PL Three", "artistId": {{plArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+# ############################################################
+# PHẦN 47. PLAYLIST - TẠO
+# ############################################################
+
+### PL1. User tạo playlist, không gửi isPublic, tên thừa khoảng trắng -> 201, name "My Private", isPublic false, songCount 0, ownerName "testuser2"
+# @name plUserPrivate
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "  My Private  " }
+
+### PL2. User tạo playlist public có mô tả -> 201, isPublic true
+# @name plUserPublic
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "My Public", "description": "Nhạc chill", "isPublic": true }
+
+### PL3. Không token tạo -> 401
+POST {{baseUrl}}/api/playlists
+Content-Type: application/json
+
+{ "name": "Hack" }
+
+### PL4. Thiếu name -> 400
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "description": "Không có tên" }
+
+### PL5. Name toàn khoảng trắng -> 400
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "   " }
+
+### PL6. Name dài 300 ký tự -> 400 (Name max 255 chars)
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }
+
+### PL7. Body không phải JSON -> 400
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+khong phai json
+
+### PL8. Admin tạo playlist public -> 201
+# @name plAdminPublic
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Admin Public", "isPublic": true }
+
+### PL9. Admin tạo playlist private -> 201
+# @name plAdminPrivate
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Admin Private" }
+
+# ############################################################
+# PHẦN 48. PLAYLIST - ĐỌC VÀ QUYỀN XEM
+# ############################################################
+
+### PL10. Playlist của user -> 200, totalElements 2, thứ tự: My Public, My Private (mới tạo trước)
+GET {{baseUrl}}/api/playlists/me
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL11. Playlist của admin -> 200, totalElements 2 (không lẫn của user)
+GET {{baseUrl}}/api/playlists/me
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL12. Không token -> 401
+GET {{baseUrl}}/api/playlists/me
+
+### PL13. Duyệt public -> 200, totalElements 2: My Public và Admin Public (không có 2 playlist private)
+GET {{baseUrl}}/api/playlists/public
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL14. Tìm public "admin" (không phân biệt hoa/thường) -> 200, 1 phần tử: Admin Public
+GET {{baseUrl}}/api/playlists/public?query=admin
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL15. Tìm public "zzzz" -> 200, content rỗng
+GET {{baseUrl}}/api/playlists/public?query=zzzz
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL16. size=0 -> 200, bị kẹp size 1
+GET {{baseUrl}}/api/playlists/public?size=0
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL17. size=abc -> 400
+GET {{baseUrl}}/api/playlists/public?size=abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL18. User xem playlist private của mình -> 200, songs []
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL19. User xem playlist public của admin -> 200
+GET {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL20. User xem playlist private của admin -> 404 (không lộ sự tồn tại)
+GET {{baseUrl}}/api/playlists/{{plAdminPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL21. Admin xem playlist private của user -> 404 (admin không có đặc quyền)
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL22. Id không tồn tại -> 404
+GET {{baseUrl}}/api/playlists/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL23. Id sai kiểu -> 400
+GET {{baseUrl}}/api/playlists/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL24. Không token -> 401
+GET {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}
+
+# ############################################################
+# PHẦN 49. PLAYLIST - THÊM BÀI
+# ############################################################
+
+### PL25. User thêm Song 1 vào My Private -> 204
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL26. User thêm Song 2 -> 204
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong2.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL27. User thêm Song 3 -> 204
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong3.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL28. User thêm lại Song 1 -> 204 (idempotent, không tạo dòng thứ 2)
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL29. Chi tiết -> 200, songCount 3, thứ tự: PL One, PL Two, PL Three
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL30. Thêm song không tồn tại -> 404
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL31. Thêm vào playlist không tồn tại -> 404
+POST {{baseUrl}}/api/playlists/999999/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL32. Admin thêm bài vào playlist private của user -> 404
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL33. User thêm bài vào playlist PUBLIC của admin -> 403 (xem được nhưng không phải owner)
+POST {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL34. User thêm bài vào playlist PRIVATE của admin -> 404
+POST {{baseUrl}}/api/playlists/{{plAdminPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL35. songId sai kiểu -> 400
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/abc
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL36. Không token -> 401
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+
+# ############################################################
+# PHẦN 50. PLAYLIST - ĐỔI THỨ TỰ
+# ############################################################
+
+### PL37. Reorder thành Song 3, Song 1, Song 2 -> 204
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [{{plSong3.response.body.id}}, {{plSong1.response.body.id}}, {{plSong2.response.body.id}}] }
+
+### PL38. Chi tiết -> 200, thứ tự: PL Three, PL One, PL Two
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL39. Reorder thiếu 1 bài -> 400
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [{{plSong1.response.body.id}}, {{plSong2.response.body.id}}] }
+
+### PL40. Reorder có id lạ (đủ số lượng nhưng 1 id không thuộc playlist) -> 400
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [{{plSong1.response.body.id}}, {{plSong2.response.body.id}}, 999999] }
+
+### PL41. Reorder có id trùng (đủ số lượng nhưng lặp Song 3, thiếu Song 2) -> 400
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [{{plSong3.response.body.id}}, {{plSong3.response.body.id}}, {{plSong1.response.body.id}}] }
+
+### PL42. Thiếu field songIds -> 400
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{}
+
+### PL43. Admin reorder playlist private của user -> 404
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/reorder
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [] }
+
+### PL44. User reorder playlist public của admin -> 403
+PUT {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [] }
+
+### PL45. Chi tiết -> 200, thứ tự VẪN là PL Three, PL One, PL Two (các reorder sai không làm đổi dữ liệu)
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL46. Reorder playlist không tồn tại -> 404
+PUT {{baseUrl}}/api/playlists/999999/reorder
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "songIds": [] }
+
+# ############################################################
+# PHẦN 51. PLAYLIST - BỚT BÀI
+# ############################################################
+
+### PL47. User bớt Song 1 (bài ở giữa) -> 204
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL48. Chi tiết -> 200, songCount 2, thứ tự: PL Three, PL Two
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL49. Bớt lại Song 1 -> 204 (idempotent)
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL50. Bớt song không tồn tại -> 204
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL51. Admin bớt bài khỏi playlist private của user -> 404
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL52. User bớt bài khỏi playlist public của admin -> 403
+DELETE {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL53. Bớt bài khỏi playlist không tồn tại -> 404
+DELETE {{baseUrl}}/api/playlists/999999/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL54. Thêm lại Song 1 -> 204 (phải xếp cuối)
+POST {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL55. Chi tiết -> 200, thứ tự: PL Three, PL Two, PL One
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 52. PLAYLIST - SỬA
+# ############################################################
+
+### PL56. User sửa My Private thành public -> 200, name "My Renamed", isPublic true, songCount 3
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "My Renamed", "description": "Đã đổi", "isPublic": true }
+
+### PL57. Admin xem playlist đó -> 200 (giờ đã public nên thấy được)
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL58. User sửa lại, không gửi isPublic và description -> 200, isPublic false, description null (PUT thay thế toàn bộ)
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "My Renamed" }
+
+### PL59. Admin xem lại -> 404 (đã private trở lại)
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL60. Sửa name rỗng -> 400
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "" }
+
+### PL61. Admin sửa playlist private của user -> 404
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hack" }
+
+### PL62. User sửa playlist public của admin -> 403
+PUT {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Hack" }
+
+### PL63. Sửa playlist không tồn tại -> 404
+PUT {{baseUrl}}/api/playlists/999999
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Ghost" }
+
+### PL64. Không token sửa -> 401
+PUT {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Content-Type: application/json
+
+{ "name": "Hack" }
+
+# ############################################################
+# PHẦN 53. PLAYLIST - XÓA VÀ DỌN DẸP
+# ############################################################
+
+### PL65. User xóa playlist public của admin -> 403
+DELETE {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL66. Admin xóa playlist private của user -> 404
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL67. Admin xóa Song 1 (đang nằm trong playlist của user) -> 204, KHÔNG được ra 409/500
+DELETE {{baseUrl}}/api/admin/songs/{{plSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL68. Chi tiết playlist của user -> 200, songCount 2, còn PL Three, PL Two
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL69. User xóa playlist của mình (đang có bài) -> 204
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL70. Xóa lại -> 404
+DELETE {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL71. Đọc playlist đã xóa -> 404
+GET {{baseUrl}}/api/playlists/{{plUserPrivate.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL72. User xóa My Public -> 204
+DELETE {{baseUrl}}/api/playlists/{{plUserPublic.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### PL73. Admin xóa Admin Public -> 204
+DELETE {{baseUrl}}/api/playlists/{{plAdminPublic.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL74. Admin xóa Admin Private -> 204
+DELETE {{baseUrl}}/api/playlists/{{plAdminPrivate.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL75. Admin xóa Song 2 -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{plSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL76. Admin xóa Song 3 -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{plSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### PL77. Admin xóa artist -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{plArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 54. ADMIN USER - CHUẨN BỊ
+# ############################################################
+
+### US0a. Artist -> 201
+# @name usArtist
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "US Artist" }
+
+### US0b. Song -> 201
+# @name usSong
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "US Song", "artistId": {{usArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### US0c. Register banme -> 201
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "banme", "email": "banme@example.com", "password": "{{password}}" }
+
+### US0d. Register delme -> 201
+POST {{baseUrl}}/api/auth/register
+Content-Type: application/json
+
+{ "username": "delme", "email": "delme@example.com", "password": "{{password}}" }
+
+### US0e. Login banme -> 200
+# @name loginBan
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "banme", "password": "{{password}}" }
+
+### US0f. Login delme -> 200
+# @name loginDel
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "delme", "password": "{{password}}" }
+
+# ############################################################
+# PHẦN 55. ADMIN USER - DANH SÁCH
+# ############################################################
+
+### US1. Admin xem danh sách -> 200, có banned và createdAt, KHÔNG có passwordHash
+GET {{baseUrl}}/api/admin/users
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US2. User thường xem -> 403
+GET {{baseUrl}}/api/admin/users
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### US3. Không token -> 401
+GET {{baseUrl}}/api/admin/users
+
+### US4. Tìm "banme" -> 200, 1 phần tử
+GET {{baseUrl}}/api/admin/users?query=banme
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US5. Tìm "DELME@EXAMPLE" (theo email, không phân biệt hoa/thường) -> 200, 1 phần tử delme
+GET {{baseUrl}}/api/admin/users?query=DELME@EXAMPLE
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US6. Tìm "zzzz" -> 200, content rỗng
+GET {{baseUrl}}/api/admin/users?query=zzzz
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US7. size=0 -> 200, bị kẹp size 1
+GET {{baseUrl}}/api/admin/users?size=0
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US8. size=abc -> 400
+GET {{baseUrl}}/api/admin/users?size=abc
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 56. ADMIN USER - BAN
+# ############################################################
+
+### US9. Admin ban banme -> 200, banned true
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": true }
+
+### US10. banme đăng nhập -> 401
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "banme", "password": "{{password}}" }
+
+### US11. banme dùng token cũ (lấy trước khi bị ban) -> 401, ban có hiệu lực ngay
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginBan.response.body.accessToken}}
+
+### US11b. banme (đang bị ban) dùng refresh token -> 401
+POST {{baseUrl}}/api/auth/refresh
+Content-Type: application/json
+
+{ "refreshToken": "{{loginBan.response.body.refreshToken}}" }
+
+### US12. Ban lại lần nữa -> 200, banned true (idempotent)
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": true }
+
+### US13. Admin gỡ ban -> 200, banned false
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": false }
+
+### US14. banme đăng nhập lại -> 200
+# @name loginBan2
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "banme", "password": "{{password}}" }
+
+### US15. Body thiếu field banned -> 400
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{}
+
+### US16. banned sai kiểu -> 400
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": "abc" }
+
+### US17. User thường ban -> 403
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": true }
+
+### US18. Không token ban -> 401
+PUT {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}/ban
+Content-Type: application/json
+
+{ "banned": true }
+
+### US19. Ban user không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/users/999999/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": true }
+
+### US20. id sai kiểu -> 400
+PUT {{baseUrl}}/api/admin/users/abc/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": true }
+
+### US21. Admin tự ban mình -> 409
+PUT {{baseUrl}}/api/admin/users/{{loginAdmin.response.body.user.id}}/ban
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "banned": true }
+
+# ############################################################
+# PHẦN 57. ADMIN USER - TẠO DỮ LIỆU CHO delme
+# ############################################################
+
+### US22. delme follow artist -> 204
+POST {{baseUrl}}/api/artists/{{usArtist.response.body.id}}/follow
+Authorization: Bearer {{loginDel.response.body.accessToken}}
+
+### US23. Xem artist -> 200, popularity 1
+GET {{baseUrl}}/api/artists/{{usArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US24. delme yêu thích bài -> 204
+POST {{baseUrl}}/api/favorites/{{usSong.response.body.id}}
+Authorization: Bearer {{loginDel.response.body.accessToken}}
+
+### US25. delme ghi nhận đã nghe -> 204
+POST {{baseUrl}}/api/recently-played/{{usSong.response.body.id}}
+Authorization: Bearer {{loginDel.response.body.accessToken}}
+
+### US26. delme tạo playlist public -> 201
+# @name usPlaylist
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginDel.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "Del Playlist", "isPublic": true }
+
+### US27. delme thêm bài vào playlist -> 204
+POST {{baseUrl}}/api/playlists/{{usPlaylist.response.body.id}}/songs/{{usSong.response.body.id}}
+Authorization: Bearer {{loginDel.response.body.accessToken}}
+
+### US28. Tìm playlist public "Del Playlist" -> 200, 1 phần tử, songCount 1
+GET {{baseUrl}}/api/playlists/public?query=Del%20Playlist
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 58. ADMIN USER - XÓA
+# ############################################################
+
+### US29. User thường xóa delme -> 403
+DELETE {{baseUrl}}/api/admin/users/{{loginDel.response.body.user.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### US30. Không token xóa -> 401
+DELETE {{baseUrl}}/api/admin/users/{{loginDel.response.body.user.id}}
+
+### US31. Admin tự xóa mình -> 409
+DELETE {{baseUrl}}/api/admin/users/{{loginAdmin.response.body.user.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US32. Xóa user không tồn tại -> 404
+DELETE {{baseUrl}}/api/admin/users/999999
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US33. id sai kiểu -> 400
+DELETE {{baseUrl}}/api/admin/users/abc
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US34. Admin xóa delme (đang follow, yêu thích, có lịch sử, có playlist) -> 204, KHÔNG được ra 409/500
+DELETE {{baseUrl}}/api/admin/users/{{loginDel.response.body.user.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US34b. delme đã bị xóa mà dùng token cũ -> 401 (KHÔNG được ra 500)
+GET {{baseUrl}}/api/genres
+Authorization: Bearer {{loginDel.response.body.accessToken}}
+
+### US35. Xóa lại -> 404
+DELETE {{baseUrl}}/api/admin/users/{{loginDel.response.body.user.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US36. delme đăng nhập -> 401
+POST {{baseUrl}}/api/auth/login
+Content-Type: application/json
+
+{ "usernameOrEmail": "delme", "password": "{{password}}" }
+
+### US37. Xem artist -> 200, popularity về 0 (lượt follow của delme đã được trừ)
+GET {{baseUrl}}/api/artists/{{usArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US38. Tìm playlist public "Del Playlist" -> 200, content rỗng (playlist của delme đã xóa)
+GET {{baseUrl}}/api/playlists/public?query=Del%20Playlist
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US39. Bài hát vẫn còn -> 200 (xóa user không xóa bài hát)
+GET {{baseUrl}}/api/songs/{{usSong.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US40. Tìm "delme" -> 200, content rỗng
+GET {{baseUrl}}/api/admin/users?query=delme
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 59. ADMIN USER - DỌN DẸP
+# ############################################################
+
+### US41. Admin xóa banme -> 204
+DELETE {{baseUrl}}/api/admin/users/{{loginBan.response.body.user.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US42. Admin xóa song -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{usSong.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### US43. Admin xóa artist -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{usArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 60. UPLOAD - CHUẨN BỊ
+# ############################################################
+
+### UP0a. Artist -> 201
+# @name upArtist
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "UP Artist" }
+
+### UP0b. Artist khác -> 201
+# @name upArtist2
+POST {{baseUrl}}/api/admin/artists
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "UP Artist 2" }
+
+### UP0c. Album của UP Artist -> 201
+# @name upAlbum
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "UP Album", "artistId": {{upArtist.response.body.id}} }
+
+### UP0d. Album của UP Artist 2 -> 201
+# @name upAlbum2
+POST {{baseUrl}}/api/admin/albums
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "UP Album 2", "artistId": {{upArtist2.response.body.id}} }
+
+# ############################################################
+# PHẦN 61. UPLOAD - TẠO SONG (multipart)
+# ############################################################
+
+### UP1. Đủ metadata + audio + cover -> 201, audioUrl dạng /api/files/audio/<uuid>.mp3, imageUrl dạng /api/files/images/<uuid>.png
+# @name upSong1
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "  Up One  ", "artistId": {{upArtist.response.body.id}}, "albumId": {{upAlbum.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB
+Content-Disposition: form-data; name="cover"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP2. Chỉ metadata + audio -> 201, imageUrl null
+# @name upSong2
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Up Two", "artistId": {{upArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="b.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/b.mp3
+--UpB--
+
+### UP3. Tên file client gửi là "../../evil.MP3" -> 201, audioUrl vẫn là /api/files/audio/<uuid>.mp3 (đuôi chữ thường, không còn "../")
+# @name upSong3
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Up Three", "artistId": {{upArtist.response.body.id}}, "durationMs": 100000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="../../evil.MP3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP4. Không token -> 401
+POST {{baseUrl}}/api/admin/songs
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": 1, "durationMs": 1000 }
+--UpB--
+
+### UP5. User thường -> 403
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Hack", "artistId": 1, "durationMs": 1000 }
+--UpB--
+
+### UP6. Gửi JSON kiểu cũ vào endpoint multipart -> 415
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Old Way", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000, "audioUrl": "x" }
+
+# ############################################################
+# PHẦN 62. UPLOAD - TẠO SONG SAI
+# ############################################################
+
+### UP7. Thiếu part audio -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "No Audio", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB--
+
+### UP8. Thiếu part metadata -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP9. Metadata không có Content-Type application/json -> 415
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: text/plain
+
+{ "title": "Plain", "artistId": 1, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP10. Metadata thiếu title -> 400 (errors.title)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP11. artistId không tồn tại -> 404 (uploads/audio KHÔNG tăng thêm file)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Ghost", "artistId": 999999, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP12. Album thuộc artist khác -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Mismatch", "artistId": {{upArtist.response.body.id}}, "albumId": {{upAlbum2.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP13. Audio đuôi .txt -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Txt", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="notes.txt"
+Content-Type: audio/mpeg
+
+< ./test-files/notes.txt
+--UpB--
+
+### UP14. Audio đuôi .mp3 nhưng Content-Type text/plain -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "BadType", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: text/plain
+
+< ./test-files/a.mp3
+--UpB--
+
+### UP15. Audio đuôi .exe -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Exe", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="evil.exe"
+Content-Type: audio/mpeg
+
+< ./test-files/evil.exe
+--UpB--
+
+### UP16. Audio rỗng (0 byte) -> 400
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Empty", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="empty.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/empty.mp3
+--UpB--
+
+### UP17. Audio 22MB -> 413
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Big", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="big.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/big.mp3
+--UpB--
+
+### UP18. Cover là file mp3 (sai loại ảnh) -> 400, và audio vừa lưu phải được dọn (uploads/audio KHÔNG tăng thêm file)
+POST {{baseUrl}}/api/admin/songs
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="metadata"
+Content-Type: application/json
+
+{ "title": "Bad Cover", "artistId": {{upArtist.response.body.id}}, "durationMs": 1000 }
+--UpB
+Content-Disposition: form-data; name="audio"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB
+Content-Disposition: form-data; name="cover"; filename="a.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/a.mp3
+--UpB--
+
+# ############################################################
+# PHẦN 63. UPLOAD - PHỤC VỤ FILE
+# ############################################################
+
+### UP19. Tải audio KHÔNG cần token -> 200, Content-Type audio/mpeg
+GET {{baseUrl}}{{upSong1.response.body.audioUrl}}
+
+### UP20. Tải một đoạn (Range) -> 206 Partial Content, có Content-Range
+GET {{baseUrl}}{{upSong1.response.body.audioUrl}}
+Range: bytes=0-3
+
+### UP21. Tải cover -> 200, Content-Type image/png, có X-Content-Type-Options: nosniff (xem Response Headers)
+GET {{baseUrl}}{{upSong1.response.body.imageUrl}}
+
+### UP22. Tên file không tồn tại (uuid lạ) -> 404
+GET {{baseUrl}}/api/files/audio/00000000-0000-0000-0000-000000000000.mp3
+
+### UP23. Tên file không đúng dạng uuid -> 404
+GET {{baseUrl}}/api/files/audio/hello.mp3
+
+### UP24. Path traversal -> KHÔNG được ra 200 (400 hoặc 404 đều đạt)
+GET {{baseUrl}}/api/files/audio/..%2F..%2Fapplication.yml
+
+### UP25. Type lạ -> 404
+GET {{baseUrl}}/api/files/video/00000000-0000-0000-0000-000000000000.mp4
+
+### UP26. File audio đòi qua folder images (uuid .mp3 trong /images) -> 404
+GET {{baseUrl}}/api/files/images/00000000-0000-0000-0000-000000000000.mp3
+
+# ############################################################
+# PHẦN 64. UPLOAD - SỬA METADATA, ĐỔI FILE SONG
+# ############################################################
+
+### UP27. PUT metadata (JSON), có gửi kèm audioUrl lạ -> 200, audioUrl và imageUrl VẪN NGUYÊN, title mới
+PUT {{baseUrl}}/api/admin/songs/{{upSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "Up One Renamed", "artistId": {{upArtist.response.body.id}}, "albumId": {{upAlbum.response.body.id}}, "durationMs": 120000, "audioUrl": "http://hack/x.mp3" }
+
+### UP28. Đổi audio -> 200, audioUrl là uuid mới
+# @name upReplaceAudio
+PUT {{baseUrl}}/api/admin/songs/{{upSong1.response.body.id}}/audio
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="audio"; filename="b.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/b.mp3
+--UpB--
+
+### UP29. File audio CŨ (URL từ lúc tạo) -> 404, đã bị xóa sau commit
+GET {{baseUrl}}{{upSong1.response.body.audioUrl}}
+
+### UP30. File audio MỚI -> 200
+GET {{baseUrl}}{{upReplaceAudio.response.body.audioUrl}}
+
+### UP31. Đổi audio bằng file sai loại -> 400, audioUrl không đổi
+PUT {{baseUrl}}/api/admin/songs/{{upSong1.response.body.id}}/audio
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="audio"; filename="notes.txt"
+Content-Type: audio/mpeg
+
+< ./test-files/notes.txt
+--UpB--
+
+### UP32. Đổi audio của song không tồn tại -> 404 (uploads/audio KHÔNG tăng thêm file)
+PUT {{baseUrl}}/api/admin/songs/999999/audio
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="audio"; filename="b.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/b.mp3
+--UpB--
+
+### UP33. User thường đổi audio -> 403
+PUT {{baseUrl}}/api/admin/songs/{{upSong1.response.body.id}}/audio
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="audio"; filename="b.mp3"
+Content-Type: audio/mpeg
+
+< ./test-files/b.mp3
+--UpB--
+
+### UP34. Gắn cover cho song 2 (trước đó chưa có) -> 200, imageUrl có giá trị
+# @name upCover2
+PUT {{baseUrl}}/api/admin/songs/{{upSong2.response.body.id}}/cover
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="cover"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP35. Đổi cover của song 1 -> 200, imageUrl mới
+# @name upReplaceCover
+PUT {{baseUrl}}/api/admin/songs/{{upSong1.response.body.id}}/cover
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="cover"; filename="pixel2.png"
+Content-Type: image/png
+
+< ./test-files/pixel2.png
+--UpB--
+
+### UP36. Cover CŨ của song 1 -> 404
+GET {{baseUrl}}{{upSong1.response.body.imageUrl}}
+
+### UP37. Cover MỚI -> 200
+GET {{baseUrl}}{{upReplaceCover.response.body.imageUrl}}
+
+# ############################################################
+# PHẦN 65. UPLOAD - XÓA SONG DỌN FILE
+# ############################################################
+
+### UP38. Xóa song 1 -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{upSong1.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### UP39. Audio (đang dùng lúc xóa) -> 404
+GET {{baseUrl}}{{upReplaceAudio.response.body.audioUrl}}
+
+### UP40. Cover (đang dùng lúc xóa) -> 404
+GET {{baseUrl}}{{upReplaceCover.response.body.imageUrl}}
+
+### UP41. Xóa song 2 -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{upSong2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### UP42. Cover của song 2 -> 404
+GET {{baseUrl}}{{upCover2.response.body.imageUrl}}
+
+### UP43. Xóa song 3 -> 204
+DELETE {{baseUrl}}/api/admin/songs/{{upSong3.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 66. UPLOAD - ẢNH ARTIST
+# ############################################################
+
+### UP44. Upload ảnh artist -> 200, imageUrl dạng /api/files/images/<uuid>.png
+# @name upArtistImg1
+PUT {{baseUrl}}/api/admin/artists/{{upArtist.response.body.id}}/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP45. Tải ảnh -> 200
+GET {{baseUrl}}{{upArtistImg1.response.body.imageUrl}}
+
+### UP46. PUT artist (chỉ name) -> 200, imageUrl VẪN NGUYÊN (không bị ghi đè null)
+PUT {{baseUrl}}/api/admin/artists/{{upArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "UP Artist Renamed" }
+
+### UP47. Đổi ảnh -> 200
+# @name upArtistImg2
+PUT {{baseUrl}}/api/admin/artists/{{upArtist.response.body.id}}/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel2.png"
+Content-Type: image/png
+
+< ./test-files/pixel2.png
+--UpB--
+
+### UP48. Ảnh cũ -> 404
+GET {{baseUrl}}{{upArtistImg1.response.body.imageUrl}}
+
+### UP49. Ảnh sai loại (.txt) -> 400
+PUT {{baseUrl}}/api/admin/artists/{{upArtist.response.body.id}}/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="notes.txt"
+Content-Type: image/png
+
+< ./test-files/notes.txt
+--UpB--
+
+### UP50. Artist không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/artists/999999/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP51. User thường -> 403
+PUT {{baseUrl}}/api/admin/artists/{{upArtist.response.body.id}}/image
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+# ############################################################
+# PHẦN 67. UPLOAD - ẢNH ALBUM
+# ############################################################
+
+### UP52. Upload ảnh album -> 200
+# @name upAlbumImg
+PUT {{baseUrl}}/api/admin/albums/{{upAlbum.response.body.id}}/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP53. PUT album (title + artistId) -> 200, imageUrl VẪN NGUYÊN
+PUT {{baseUrl}}/api/admin/albums/{{upAlbum.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: application/json
+
+{ "title": "UP Album Renamed", "artistId": {{upArtist.response.body.id}} }
+
+### UP54. Album không tồn tại -> 404
+PUT {{baseUrl}}/api/admin/albums/999999/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP55. Xóa album -> 204
+DELETE {{baseUrl}}/api/admin/albums/{{upAlbum.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### UP56. Ảnh album sau khi xóa -> 404
+GET {{baseUrl}}{{upAlbumImg.response.body.imageUrl}}
+
+# ############################################################
+# PHẦN 68. UPLOAD - ẢNH PLAYLIST (chỉ owner)
+# ############################################################
+
+### UP57. User tạo playlist public -> 201
+# @name upPlaylist
+POST {{baseUrl}}/api/playlists
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "UP Playlist", "isPublic": true }
+
+### UP58. Owner upload ảnh -> 200, songCount 0
+# @name upPlaylistImg
+PUT {{baseUrl}}/api/playlists/{{upPlaylist.response.body.id}}/image
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP59. Admin (không phải owner) upload vào playlist PUBLIC của user -> 403
+PUT {{baseUrl}}/api/playlists/{{upPlaylist.response.body.id}}/image
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel2.png"
+Content-Type: image/png
+
+< ./test-files/pixel2.png
+--UpB--
+
+### UP60. Không token -> 401
+PUT {{baseUrl}}/api/playlists/{{upPlaylist.response.body.id}}/image
+Content-Type: multipart/form-data; boundary=UpB
+
+--UpB
+Content-Disposition: form-data; name="image"; filename="pixel.png"
+Content-Type: image/png
+
+< ./test-files/pixel.png
+--UpB--
+
+### UP61. PUT playlist (JSON) -> 200, imageUrl VẪN NGUYÊN
+PUT {{baseUrl}}/api/playlists/{{upPlaylist.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+Content-Type: application/json
+
+{ "name": "UP Playlist Renamed", "isPublic": true }
+
+### UP62. Owner xóa playlist -> 204
+DELETE {{baseUrl}}/api/playlists/{{upPlaylist.response.body.id}}
+Authorization: Bearer {{loginUser.response.body.accessToken}}
+
+### UP63. Ảnh playlist sau khi xóa -> 404
+GET {{baseUrl}}{{upPlaylistImg.response.body.imageUrl}}
+
+# ############################################################
+# PHẦN 69. UPLOAD - DỌN DẸP
+# ############################################################
+
+### UP64. Xóa artist (có ảnh) -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{upArtist.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### UP65. Ảnh artist sau khi xóa -> 404
+GET {{baseUrl}}{{upArtistImg2.response.body.imageUrl}}
+
+### UP66. Xóa album 2 -> 204
+DELETE {{baseUrl}}/api/admin/albums/{{upAlbum2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+### UP67. Xóa artist 2 -> 204
+DELETE {{baseUrl}}/api/admin/artists/{{upArtist2.response.body.id}}
+Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+

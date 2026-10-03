@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX uq_genres_name_lower ON genres (LOWER(name));
