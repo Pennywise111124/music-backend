@@ -26,7 +26,7 @@ Repo app Android: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc so
 1. Claude viết sẵn Entity, Repository, DTO, Controller, Exception, Config. **Service impl để TODO kèm hướng dẫn chi tiết trong Javadoc** cho người dùng tự viết.
 2. Người dùng tự code phần TODO, dán lại để review.
 3. Claude review: lỗi cú pháp, lỗi bản chất (giải thích tại sao), gom pattern lặp lại.
-4. Test qua `requests.http` có bảng kết quả kỳ vọng; sau này thêm test tự động.
+4. Test qua `requests.http` có 69 phần, 515 request, mỗi request có mã và kết quả kỳ vọng; sau này thêm test tự động.
 5. Xong mới chuyển module tiếp theo.
 6. **Khi test lệch, kiểm tra thứ tự chạy request và dữ liệu cũ trước khi nghi code.**
 7. Để chắc test thật sự bảo vệ code: **phá code cố ý** rồi xem test có fail đúng chỗ không.
@@ -84,7 +84,7 @@ Repo app Android: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc so
 
 ## 6. Quy ước code
 
-- Body lỗi qua `buildResponse`: `{timestamp, status, message}` hoặc `{timestamp, status, errors{field: msg}}`. 401 do thiếu/sai token: body rỗng; 401 do login/refresh: có JSON; 403 do role: định dạng mặc định Spring; 403 do playlist: có JSON message
+- Body lỗi qua `buildResponse`: `{timestamp, status, message}` hoặc `{timestamp, status, errors{field: msg}}`. 401 do thiếu/sai token: body rỗng; 401 do login/refresh: có JSON (login luôn là `Invalid credentials`, kể cả khi bị ban; refresh có 3 thông báo riêng, xem design mục 5); 403 do role: định dạng mặc định Spring; 403 do playlist: có JSON message
 - Mọi query danh sách có tiêu chí phụ `IdAsc`/`id` để thứ tự ổn định khi trùng (quan trọng cho phân trang).
 - Quan hệ `@ManyToOne(fetch = LAZY)` kèm `@EntityGraph` hoặc `join fetch` để tránh N+1.
 - Entity khóa kép: `@EmbeddedId` + `@MapsId`. Xóa hàng loạt bằng `@Modifying @Query` lọc theo cả userId.

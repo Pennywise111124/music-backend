@@ -5,7 +5,7 @@
 | Hạng mục | Kết quả |
 |---|---|
 | Module backend | 11/11 hoàn tất |
-| Test thủ công (`requests.http`) | 69 phần, toàn bộ đạt, chạy lại hết sau đợt upload |
+| Test thủ công (`requests.http`) | 69 phần, 515 request, mỗi request có mã và kết quả kỳ vọng, toàn bộ đạt, chạy lại hết sau đợt upload |
 | Test tự động | 77 test, 0 lỗi |
 | Migration | Flyway V1 + V2, chạy được trên DB trống (kiểm chứng bằng Testcontainers) |
 

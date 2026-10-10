@@ -53,6 +53,7 @@ Repo app gốc: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc sour
 | `JWT_SECRET` | Có | không | Chuỗi thô (UTF-8) tối thiểu 32 ký tự. **Không** phải Base64 |
 | `DB_PASSWORD` | Không | `postgres` | |
 | `DB_URL` | Không | `jdbc:postgresql://localhost:5432/musicapp` | Dùng để trỏ sang DB khác |
+| `DB_USER` | Không | `postgres` | Tên người dùng PostgreSQL |
 
 ### `application.yml` (các khóa quan trọng)
 
@@ -106,7 +107,7 @@ src/main/resources/
 src/test/java/com/example/musicbackend/
   IntegrationTestBase, AuthSecurityTest, PlaylistTest, FollowTest,
   RecentlyPlayedTest, FavoriteTest, SongTest, UploadTest
-requests.http    (test thủ công bằng REST Client, 69 phần)
+requests.http    (test thủ công bằng REST Client, 69 phần, 515 request, mỗi request có mã và kết quả kỳ vọng)
 test-files/      (file mẫu cho test upload; big.mp3 nằm trong .gitignore)
 uploads/         (file người dùng tải lên; nằm trong .gitignore)
 ```
@@ -172,7 +173,16 @@ Ghi chú:
 ```
 
 Ngoại lệ:
-- Lỗi **401 do thiếu, sai hoặc hết hạn token** (qua filter) có body rỗng. Lỗi **401 do login/refresh** (`Invalid credentials`, `Refresh token is invalid or expired`, `Account is banned!`) vẫn có body JSON `{timestamp, status, message}`.
+- Lỗi **401 do thiếu, sai hoặc hết hạn token** (qua filter) có body rỗng. Lỗi **401 do login/refresh** có body JSON `{timestamp, status, message}` với các thông báo sau:
+
+  | Endpoint | Thông báo | Khi nào |
+  |---|---|---|
+  | `POST /api/auth/login` | `Invalid credentials` | Sai mật khẩu, tài khoản không tồn tại, **hoặc tài khoản bị ban** (cố ý không phân biệt) |
+  | `POST /api/auth/refresh` | `Refresh token is invalid or expired` | Token hỏng, hết hạn, hoặc sai loại (ví dụ dùng access token) |
+  | `POST /api/auth/refresh` | `Account is not found!` | Refresh token hợp lệ nhưng user đã bị xóa |
+  | `POST /api/auth/refresh` | `Account is banned!` | Refresh token hợp lệ nhưng user đang bị ban |
+
+  Client không nên so khớp chuỗi thông báo để quyết định hành vi; chỉ cần coi 401 từ `/refresh` là phải đăng xuất.
 - Lỗi **403** có hai dạng: (a) do Spring Security (không đủ role ADMIN) dùng định dạng mặc định (`timestamp`, `status`, `error`, `path`, không có `message`); (b) do nghiệp vụ playlist (`PlaylistAccessDeniedException`) có JSON `{timestamp, status, message}`.
 - Thông báo lỗi nghiệp vụ của Auth bằng tiếng Anh; thông báo validation của Register/Login bằng tiếng Việt (`RefreshRequest` bằng tiếng Anh); các module khác tiếng Anh.
 
@@ -382,7 +392,7 @@ Không có `ON DELETE CASCADE`, nên service dọn thủ công theo thứ tự (
 ## 11. Kiểm thử
 
 - **Tự động:** `./mvnw test` (cần Docker Desktop đang chạy). Testcontainers dựng Postgres sạch, Flyway chạy V1 và V2, `ddl-auto: validate` xác nhận entity khớp schema. Test gọi API thật qua `HttpClient` trên cổng ngẫu nhiên, mỗi test tự tạo user và dữ liệu tên ngẫu nhiên. **77 test**, gồm cả ca đồng thời (race): thêm bài playlist, follow, favorite.
-- **Thủ công:** `requests.http` (VS Code, extension REST Client), 69 phần, mỗi test có mã (A, TK, RF, GN, AR, AL, SG, FV, FL, RP, PL, US, UP) và kết quả kỳ vọng.
+- **Thủ công:** `requests.http` (VS Code, extension REST Client), 69 phần, 515 request, mỗi request có mã và kết quả kỳ vọng.
 - Các bảo đảm quan trọng đều đã được kiểm chứng bằng cách **phá code cố ý** để thấy test fail (xem `docs/PROGRESS.md`).
 
 ---
