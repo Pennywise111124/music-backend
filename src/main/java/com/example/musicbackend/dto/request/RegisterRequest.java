@@ -2,6 +2,7 @@ package com.example.musicbackend.dto.request;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 import lombok.Getter;
 import lombok.Setter;
@@ -12,6 +13,7 @@ public class RegisterRequest {
 
     @NotBlank(message = "Username không được để trống")
     @Size(min = 3, max = 30, message = "Username phải từ 3-30 ký tự")
+    @Pattern(regexp = "^[^@\\s]+$", message = "Username không được chứa ký tự @ hoặc khoảng trắng")
     private String username;
 
     @NotBlank(message = "Email không được để trống")

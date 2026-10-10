@@ -1,6 +1,8 @@
 package com.example.musicbackend;
 
 import org.junit.jupiter.api.Test;
+import com.example.musicbackend.security.JwtUtil;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,6 +35,18 @@ class AuthSecurityTest extends IntegrationTestBase {
                 {"username":"ab","email":"nope","password":"1"}
                 """);
         assertEquals(400, r.status());
+    }
+
+    @Autowired
+    JwtUtil jwtUtil;
+
+    @Test
+    void register_usernameWithAt_badRequest() {
+        Resp r = post("/api/auth/register", null,
+                "{\"username\":\"co@dau\",\"email\":\"" + unique("at") + "@example.com\","
+                        + "\"password\":\"" + PASSWORD + "\"}");
+        assertEquals(400, r.status());
+        assertTrue(r.str("$.errors.username").contains("@"));
     }
 
     @Test
@@ -98,6 +112,24 @@ class AuthSecurityTest extends IntegrationTestBase {
         assertEquals(400, post("/api/auth/refresh", null, "{}").status());
     }
 
+    @Test
+    void token_worksEvenWhenUsernameEqualsAnotherUsersEmail() {
+        TestUser u1 = newUser();
+        TestUser u2 = newUser();
+
+        String u1Email = jdbc.queryForObject(
+                "SELECT email FROM users WHERE id = ?", String.class, u1.id());
+
+        jdbc.update("UPDATE users SET username = ? WHERE id = ?", u1Email, u2.id());
+
+        String token = jwtUtil.generateAccessToken(u1Email);
+
+        Resp r = post("/api/playlists", token, "{\"name\":\"Trung danh tinh\",\"isPublic\":true}");
+
+        assertEquals(201, r.status());
+        assertEquals(u2.id(), r.num("$.ownerId"));
+    }
+
     // ---------- Phân quyền ----------
 
     @Test
@@ -127,6 +159,18 @@ class AuthSecurityTest extends IntegrationTestBase {
         assertEquals(403, post("/api/admin/artists", user.access(), "{\"name\":\"Hack\"}").status());
     }
 
+    @Test
+    void forbidden_hasJsonBody() {
+        TestUser user = newUser();
+
+        Resp r = get("/api/admin/users", user.access());
+
+        assertEquals(403, r.status());
+        assertEquals(403, r.num("$.status"));
+        assertFalse(r.str("$.message").isBlank());
+        assertFalse(r.str("$.timestamp").isBlank());
+    }
+
     // ---------- Ban, xóa user ----------
 
     @Test
@@ -139,17 +183,14 @@ class AuthSecurityTest extends IntegrationTestBase {
         Resp ban = put("/api/admin/users/" + victim.id() + "/ban", admin.access(), "{\"banned\":true}");
         assertEquals(200, ban.status());
 
-        // token đang sống bị chặn ngay, login và refresh cũng bị chặn
         assertEquals(401, get("/api/genres", victim.access()).status());
         assertEquals(401, loginRaw(victim.username(), PASSWORD).status());
         assertEquals(401, post("/api/auth/refresh", null,
                 "{\"refreshToken\":\"" + victim.refresh() + "\"}").status());
 
-        // idempotent
         assertEquals(200, put("/api/admin/users/" + victim.id() + "/ban", admin.access(),
                 "{\"banned\":true}").status());
 
-        // gỡ ban
         assertEquals(200, put("/api/admin/users/" + victim.id() + "/ban", admin.access(),
                 "{\"banned\":false}").status());
         assertEquals(200, loginRaw(victim.username(), PASSWORD).status());
@@ -176,7 +217,6 @@ class AuthSecurityTest extends IntegrationTestBase {
                 "{\"banned\":true}").status());
         assertEquals(409, delete("/api/admin/users/" + admin2.id(), admin1.access()).status());
 
-        // admin vẫn còn nguyên
         assertEquals(200, get("/api/admin/users", admin2.access()).status());
     }
 
@@ -199,7 +239,6 @@ class AuthSecurityTest extends IntegrationTestBase {
 
         assertEquals(204, delete("/api/admin/users/" + victim.id(), admin.access()).status());
 
-        // token cũ của user đã xóa: 401, không phải 500
         assertEquals(401, get("/api/genres", victim.access()).status());
         assertEquals(401, loginRaw(victim.username(), PASSWORD).status());
         assertEquals(404, delete("/api/admin/users/" + victim.id(), admin.access()).status());
