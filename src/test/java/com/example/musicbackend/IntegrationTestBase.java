@@ -31,11 +31,10 @@ abstract class IntegrationTestBase {
 
     static final String PASSWORD = "Passw0rd!";
 
-    // Một container dùng chung cho mọi class test trong lần chạy (khởi động 1 lần,
-    // tắt khi JVM thoát)
     static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
 
     static {
+        MusicBackendApplication.configureTimeZone();
         POSTGRES.start();
     }
 
