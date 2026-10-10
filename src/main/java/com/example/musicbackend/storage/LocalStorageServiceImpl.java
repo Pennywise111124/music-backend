@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.UUID;
 import java.util.regex.Pattern;
@@ -75,6 +76,16 @@ public class LocalStorageServiceImpl implements StorageService {
             throw new InvalidFileException("Content-Type is not allowed: " + contentType);
         }
 
+        byte[] header = readHeader(file);
+        String detected = FileSignature.detect(category, header)
+                .orElseThrow(() -> new InvalidFileException(
+                        "File content is not a valid " + kindOf(category) + " file"));
+
+        String declared = ext.equals("jpeg") ? "jpg" : ext;
+        if (!detected.equals(declared)) {
+            throw new InvalidFileException("File content does not match its extension");
+        }
+
         String filename = UUID.randomUUID() + "." + ext;
 
         Path dir = root.resolve(category.getFolder());
@@ -126,5 +137,19 @@ public class LocalStorageServiceImpl implements StorageService {
         } catch (IOException e) {
             log.warn("Could not delete file {}", publicUrl, e);
         }
+    }
+
+    private static byte[] readHeader(MultipartFile file) {
+        try (InputStream in = file.getInputStream()) {
+            byte[] buf = new byte[FileSignature.HEADER_BYTES];
+            int n = in.readNBytes(buf, 0, buf.length);
+            return Arrays.copyOf(buf, n);
+        } catch (IOException e) {
+            throw new StorageException("Could not read file", e);
+        }
+    }
+
+    private static String kindOf(FileCategory category) {
+        return category == FileCategory.AUDIO ? "audio" : "image";
     }
 }
