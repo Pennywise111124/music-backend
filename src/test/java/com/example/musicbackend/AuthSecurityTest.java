@@ -249,8 +249,23 @@ class AuthSecurityTest extends IntegrationTestBase {
         assertEquals(0, count("favorite_songs", "user_id", victim.id()));
         assertEquals(0, count("followed_artists", "user_id", victim.id()));
         assertEquals(0, count("recently_played", "user_id", victim.id()));
-        // bài hát vẫn còn
+
         assertEquals(200, get("/api/songs/" + song, admin.access()).status());
+    }
+
+    // ---------- Actuator ----------
+
+    @Test
+    void actuatorHealth_isPublic() {
+        Resp r = get("/actuator/health", null);
+
+        assertEquals(200, r.status());
+        assertTrue(r.body().contains("UP"));
+    }
+
+    @Test
+    void otherActuatorEndpoints_stayProtected() {
+        assertEquals(401, get("/actuator/env", null).status());
     }
 
     private long count(String table, String column, long value) {

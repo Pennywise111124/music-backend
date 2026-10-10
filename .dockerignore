@@ -1,0 +1,12 @@
+target/
+uploads/
+test-files/
+.git/
+.idea/
+.vscode/
+*.iml
+.env
+HELP.md
+requests.http
+docs/
+*.md

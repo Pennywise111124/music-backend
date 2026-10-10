@@ -32,5 +32,8 @@ app:
   storage:
     upload-dir: uploads
 
-
-  
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
