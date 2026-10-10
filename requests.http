@@ -428,7 +428,7 @@ POST {{baseUrl}}/api/admin/artists
 Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 Content-Type: application/json
 
-{ "name": "  Sơn Tùng M-TP  ", "info": "Ca sĩ, nhạc sĩ Việt Nam." }
+{ "name": "  IC Music  ", "info": "Ca sĩ, nhạc sĩ Việt Nam." }
 
 ### AR10. Tạo chỉ có name -> 201, imageUrl và info là null
 # @name createDen
