@@ -10,20 +10,20 @@
 #    Sau khi đổi role bằng SQL, phải login lại để lấy token mới.
 # 4. Chạy lần lượt từ trên xuống dưới. DB nên được reset trước khi chạy cả bộ.
 #
-# FILE TEST: tạo thư mục test-files/ cạnh file này, gồm:
-#   a.mp3, b.mp3        file mp3 hợp lệ nhỏ
-#   pixel.png, pixel2.png   ảnh png hợp lệ nhỏ
+# FILE TEST: tạo thư mục test-files/ cạnh file này (script nằm trong README, mục Test), gồm:
+#   a.mp3, b.mp3        file có chữ ký MP3 hợp lệ (bắt đầu bằng "ID3"). Server kiểm tra byte đầu nên file giả toàn chữ bị từ chối
+#   pixel.png, pixel2.png   file có chữ ký PNG hợp lệ
 #   notes.txt           file văn bản bất kỳ
 #   evil.exe            file bất kỳ đặt tên .exe
 #   empty.mp3           file 0 byte
-#   big.mp3             file khoảng 22MB
+#   big.mp3             file khoảng 22MB (chỉ cần vượt giới hạn kích thước)
 #
 # LƯU Ý: POST /api/admin/songs là multipart (part "metadata" + "audio" + "cover" tùy chọn).
 # Các ca lỗi 400/404 của song: kiểm tra thêm thư mục uploads/audio KHÔNG tăng file.
 #
 # Quy ước mã test:
 #   A=Auth  TK=Token  RF=Refresh  GN=Genre  AR=Artist  AL=Album  SG=Song
-#   FV=Favorite  FL=Follow  RP=Recently played  PL=Playlist  US=Admin user  UP=Upload
+#   FV=Favorite  FL=Follow  RP=Recently played  PL=Playlist  US=Admin user UP=Upload OP=Vận hành
 # ============================================================
 
 # ############################################################
@@ -3520,4 +3520,18 @@ Authorization: Bearer {{loginAdmin.response.body.accessToken}}
 ### UP67. Xóa artist 2 -> 204
 DELETE {{baseUrl}}/api/admin/artists/{{upArtist2.response.body.id}}
 Authorization: Bearer {{loginAdmin.response.body.accessToken}}
+
+# ############################################################
+# PHẦN 70. VẬN HÀNH (OP)
+# ############################################################
+
+### OP1. Health không cần token -> 200, body có "status":"UP"
+GET {{baseUrl}}/actuator/health
+
+### OP2. Endpoint actuator khác không được mở -> 401
+GET {{baseUrl}}/actuator/env
+
+### OP3. User thường gọi endpoint admin -> 403, body JSON {timestamp, status: 403, message: "Access denied"}
+GET {{baseUrl}}/api/admin/users
+Authorization: Bearer {{loginUser.response.body.accessToken}}
 

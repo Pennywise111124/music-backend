@@ -1,7 +1,7 @@
 # Tài liệu thiết kế Backend — Music Player App (bản "as-built")
 
 **Chuyển từ Room (local-only) sang Spring Boot + PostgreSQL + JWT**
-Trạng thái: backend hoàn chỉnh theo phạm vi thiết kế, 77 test tự động xanh. Tài liệu này mô tả hệ thống **như đã xây**, không phải kế hoạch ban đầu. Chỗ nào khác thiết kế gốc đều được ghi ở mục 12.
+Trạng thái: backend hoàn chỉnh theo phạm vi thiết kế, 93 test tự động xanh, chạy được bằng Docker, CI xanh trên GitHub Actions, đã nối với app Android. Tài liệu này mô tả hệ thống **như đã xây**, không phải kế hoạch ban đầu. Chỗ nào khác thiết kế gốc đều được ghi ở mục 12.
 
 ---
 
@@ -9,7 +9,7 @@ Trạng thái: backend hoàn chỉnh theo phạm vi thiết kế, 77 test tự �
 
 App Android (Kotlin, Jetpack Compose, MVVM) trước đây lưu toàn bộ dữ liệu bằng Room. Backend này thay tầng lưu trữ đó bằng server nhiều người dùng, giữ nguyên nghiệp vụ và nâng cấp các điểm không phù hợp khi lên client-server (mật khẩu, đăng nhập, phân quyền).
 
-Repo app gốc: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc source thật, không chỉ README).
+Repo app: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc source thật, không chỉ README; đã nối với backend này, tag `v2.0-backend-integration`).
 
 ### Tính năng (đối chiếu từ code Android thật)
 
@@ -45,6 +45,9 @@ Repo app gốc: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc sour
 | Khác | Spring Data JPA, Validation, Lombok |
 | Test | JUnit 5, Testcontainers (`testcontainers-postgresql`), `spring-boot-starter-test` |
 | Package gốc | `com.example.musicbackend` |
+| Container | Docker (build hai giai đoạn `maven:3.9-eclipse-temurin-21` rồi `eclipse-temurin:21-jre-alpine`), Docker Compose (app + `postgres:17-alpine`) |
+| Giám sát | Spring Boot Actuator, chỉ mở `/actuator/health` |
+| CI | GitHub Actions (`.github/workflows/ci.yml`): chạy test và build image |
 
 ### Biến môi trường
 
@@ -54,11 +57,16 @@ Repo app gốc: `github.com/Danaai/MusicPlayer-Android-Kotlin` (đã đọc sour
 | `DB_PASSWORD` | Không | `postgres` | |
 | `DB_URL` | Không | `jdbc:postgresql://localhost:5432/musicapp` | Dùng để trỏ sang DB khác |
 | `DB_USER` | Không | `postgres` | Tên người dùng PostgreSQL |
+| `SPRING_PROFILES_ACTIVE` | Không | (trống) | Docker đặt `prod`: tắt log SQL (`application-prod.yml`) |
 
 ### `application.yml` (các khóa quan trọng)
 
 ```yaml
 server.port: 8080
+spring.datasource:
+  url: ${DB_URL:jdbc:postgresql://localhost:5432/musicapp}
+  username: ${DB_USER:postgres}
+  password: ${DB_PASSWORD:postgres}
 spring.jpa.hibernate.ddl-auto: validate        # Flyway quản lý schema
 spring.flyway: { enabled: true, locations: classpath:db/migration,
                  baseline-on-migrate: true, baseline-version: 1 }
@@ -69,7 +77,10 @@ jwt.refresh-token-expiration-ms: 604800000      # 7 ngày
 app.storage.upload-dir: uploads
 app.recently-played.max-history: 30             # mặc định trong code
 app.recently-played.cleanup-cron: "0 0 3 * * *" # mặc định trong code
+management.endpoints.web.exposure.include: health
 ```
+
+Profile `prod` (`application-prod.yml`): `spring.jpa.show-sql: false` và `hibernate.format_sql: false`.
 
 ---
 
@@ -79,7 +90,7 @@ Phân lớp: Controller, Service (interface + impl), Repository (Spring Data JPA
 
 ```
 src/main/java/com/example/musicbackend/
-  MusicBackendApplication.java
+  MusicBackendApplication.java      (main gọi configureTimeZone(): JVM chạy UTC)
   config/        SecurityConfig, SchedulingConfig
   controller/    AuthController, GenreController, AdminGenreController,
                  ArtistController, FollowController, AdminArtistController,
@@ -97,18 +108,23 @@ src/main/java/com/example/musicbackend/
   exception/     GlobalExceptionHandler + các exception nghiệp vụ
   mapper/        SongMapper, ArtistMapper, PlaylistMapper
   repository/    một repository cho mỗi entity (+ PlaylistSongCount projection)
-  security/      JwtUtil, JwtAuthFilter, UserDetailsServiceImpl, CurrentUserProvider
+  security/      JwtUtil, JwtAuthFilter, UserDetailsServiceImpl,
+                 CurrentUserProvider, JsonAccessDeniedHandler
   service/       interface cho từng domain
   service/impl/  cài đặt tương ứng (+ AdminUserServiceImpl)
-  storage/       FileCategory, StorageService, LocalStorageServiceImpl, TxCallbacks
+  storage/       FileCategory, FileSignature, StorageService,
+                 LocalStorageServiceImpl, TxCallbacks
 src/main/resources/
-  application.yml
+  application.yml, application-prod.yml
   db/migration/  V1__init_schema.sql, V2__genre_name_unique_ci.sql
 src/test/java/com/example/musicbackend/
   IntegrationTestBase, AuthSecurityTest, PlaylistTest, FollowTest,
-  RecentlyPlayedTest, FavoriteTest, SongTest, UploadTest
-requests.http    (test thủ công bằng REST Client, 69 phần, 515 request, mỗi request có mã và kết quả kỳ vọng)
-test-files/      (file mẫu cho test upload; big.mp3 nằm trong .gitignore)
+  RecentlyPlayedTest, FavoriteTest, SongTest, UploadTest, TimeZoneTest
+  storage/FileSignatureTest
+Dockerfile, docker-compose.yml, .dockerignore, .env.example   (.env không commit)
+.github/workflows/ci.yml
+requests.http    (test thủ công bằng REST Client, 70 phần, 518 request, mỗi request có mã và kết quả kỳ vọng)
+test-files/      (file mẫu có chữ ký hợp lệ cho test upload; big.mp3 nằm trong .gitignore)
 uploads/         (file người dùng tải lên; nằm trong .gitignore)
 ```
 
@@ -145,24 +161,25 @@ Ghi chú:
 
 - Base URL dev: `http://localhost:8080` (trên emulator Android: `http://10.0.2.2:8080`).
 - Header: `Authorization: Bearer <accessToken>`.
-- **Mọi endpoint đều cần đăng nhập**, trừ `/api/auth/**` và `/api/files/**`. Kể cả `GET /api/genres`, `GET /api/songs`. (Bản thiết kế gốc ghi "Public/User", bản xây thật yêu cầu đăng nhập.)
+- **Mọi endpoint đều cần đăng nhập**, trừ `/api/auth/**`, `/api/files/**` và `/actuator/health`. Kể cả `GET /api/genres`, `GET /api/songs`. (Bản thiết kế gốc ghi "Public/User", bản xây thật yêu cầu đăng nhập.)
 - Nhóm `/api/admin/**` yêu cầu role `ADMIN`.
 - **PUT là thay thế toàn bộ**: field không gửi sẽ bị đặt về `null` (hoặc `false`). Client phải gửi đủ các field của resource.
 - Mọi URL file trong response (`audioUrl`, `imageUrl`) là **đường dẫn tương đối** dạng `/api/files/audio/<uuid>.mp3`. Client tự ghép với base URL.
 - Phân trang: `?page=0&size=20`. `page` âm thành 0, `size` kẹp vào [1, 50].
 - Mọi thao tác "thêm/bỏ" (favorite, follow, thêm/bớt bài playlist, xóa lịch sử) là **idempotent**: gọi lặp lại vẫn thành công.
+- Mọi thời gian (`createdAt`, ...) là **UTC**, dạng ISO-8601 **không có múi giờ**, phần giây có thể tới 9 chữ số (ví dụ `2026-10-10T10:10:44.094326254`). Client coi chuỗi này là UTC.
 
 ### Mã trạng thái và định dạng lỗi
 
 | Mã | Khi nào |
 |---|---|
 | 200, 201, 204 | Thành công (204 cho thao tác không có nội dung trả về) |
-| 400 | Validation sai, JSON hỏng, id sai kiểu, thiếu part multipart, file sai loại/rỗng, thứ tự reorder sai, album không thuộc artist |
+| 400 | Validation sai, JSON hỏng, id sai kiểu, thiếu part multipart, file sai loại/rỗng, **nội dung file không khớp loại hoặc đuôi**, thứ tự reorder sai, album không thuộc artist |
 | 401 | Thiếu/sai/hết hạn token, dùng nhầm loại token, tài khoản bị ban hoặc đã bị xóa, sai mật khẩu |
-| 403 | Không đủ quyền (role không phải ADMIN; hoặc playlist **public** của người khác khi sửa) |
+| 403 | Không đủ quyền (role không phải ADMIN; hoặc playlist **public** của người khác khi sửa). Body luôn là JSON `{timestamp, status, message}` |
 | 404 | Không tìm thấy; **playlist private của người khác luôn trả 404** |
 | 409 | Trùng dữ liệu, đang được sử dụng, admin tự xử lý mình/admin khác, đổi artist của album còn bài hát |
-| 413 | File vượt giới hạn (audio 20MB, ảnh 5MB) |
+| 413 | File vượt giới hạn (audio 20MB, ảnh 5MB); thông báo `Upload exceeds the maximum allowed size` |
 | 415 | Sai Content-Type (JSON gửi vào endpoint multipart, part `metadata` không khai `application/json`) |
 
 Định dạng body lỗi:
@@ -183,7 +200,7 @@ Ngoại lệ:
   | `POST /api/auth/refresh` | `Account is banned!` | Refresh token hợp lệ nhưng user đang bị ban |
 
   Client không nên so khớp chuỗi thông báo để quyết định hành vi; chỉ cần coi 401 từ `/refresh` là phải đăng xuất.
-- Lỗi **403** có hai dạng: (a) do Spring Security (không đủ role ADMIN) dùng định dạng mặc định (`timestamp`, `status`, `error`, `path`, không có `message`); (b) do nghiệp vụ playlist (`PlaylistAccessDeniedException`) có JSON `{timestamp, status, message}`.
+- Lỗi **403** (cả do role lẫn do nghiệp vụ playlist) có JSON `{timestamp, status, message}`. Với 403 do thiếu role ADMIN, `message` là `Access denied` (do `JsonAccessDeniedHandler`).
 - Thông báo lỗi nghiệp vụ của Auth bằng tiếng Anh; thông báo validation của Register/Login bằng tiếng Việt (`RefreshRequest` bằng tiếng Anh); các module khác tiếng Anh.
 
 ### Danh sách endpoint
@@ -192,7 +209,7 @@ Ngoại lệ:
 
 | Method | Đường dẫn | Body | Kết quả |
 |---|---|---|---|
-| POST | `/api/auth/register` | `{username (3-30), email, password (>=6)}` | 201 `AuthResponse`; 409 trùng username/email |
+| POST | `/api/auth/register` | `{username (3-30, không chứa @ hoặc khoảng trắng), email, password (>=6)}` | 201 `AuthResponse`; 409 trùng username/email |
 | POST | `/api/auth/login` | `{usernameOrEmail, password}` | 200 `AuthResponse`; 401 |
 | POST | `/api/auth/refresh` | `{refreshToken}` | 200 `AuthResponse` (access mới, refresh giữ nguyên); 401 |
 
@@ -309,10 +326,11 @@ Không có endpoint logout: client xóa token. Refresh token **không bị thu h
   - Dùng sai loại đều bị 401.
 - **`JwtAuthFilter`** nạp user từ DB ở **mỗi request** và kiểm tra `isEnabled()`. Vì vậy ban có hiệu lực ngay với token đang sống, và user đã bị xóa nhận 401 (không phải 500). `refresh()` cũng chặn tài khoản bị ban.
 - **Quy tắc đường dẫn** (`SecurityConfig`):
-  - `/api/auth/**`, `/api/files/**`, `/error`: công khai.
+  - `/api/auth/**`, `/api/files/**`, `/actuator/health/**`, `/error`: công khai.
   - `/api/admin/**`: `hasRole("ADMIN")`.
   - Còn lại: `authenticated()`.
-  - Không token: `HttpStatusEntryPoint(401)`. Có `@EnableMethodSecurity`.
+  - Không token: `HttpStatusEntryPoint(401)` (body rỗng). Thiếu quyền: `JsonAccessDeniedHandler` (403 JSON). Có `@EnableMethodSecurity`.
+- Token mang `subject = username`, nên `JwtAuthFilter` tra user bằng `findByUsername` (chính xác). Chỉ **đăng nhập** mới tra theo username hoặc email. Username không được chứa `@`, để không bao giờ trùng với email của người khác (nếu trùng, tra theo "username hoặc email" ra hai dòng và token bị coi là chưa đăng nhập).
 - Role tạo ra khi đăng ký luôn là `USER`. Nâng lên `ADMIN` bằng SQL: `UPDATE users SET role='ADMIN' WHERE username='...'`. Quyền đọc từ DB mỗi request nên có hiệu lực ngay.
 - **Kiểm tra quyền sở hữu ở tầng service** (không chỉ theo role). Admin **không** có đặc quyền với playlist của người khác.
 
@@ -352,12 +370,19 @@ Không có endpoint logout: client xóa token. Refresh token **không bị thu h
 
 - Interface `StorageService` (Strategy Pattern). Cài đặt hiện tại: `LocalStorageServiceImpl`, lưu vào `uploads/audio/` và `uploads/images/`. Muốn chuyển S3 hoặc Cloudinary chỉ cần thêm một implementation.
 - **Tên file do server sinh** (`<uuid>.<ext>`), không bao giờ dùng tên client gửi (chặn path traversal và trùng tên). Phục vụ file kiểm tra tên bằng regex UUID và `startsWith` thư mục.
-- Kiểm tra: đuôi, Content-Type, kích thước, file rỗng.
+- Thứ tự kiểm tra trước khi ghi file: file rỗng, kích thước, đuôi, Content-Type, rồi **chữ ký (byte đầu của file)**. File bị từ chối không để lại gì trên đĩa.
 
-| Loại | Đuôi | Tối đa |
+| Loại | Chữ ký (`FileSignature`) | Đuôi chuẩn |
 |---|---|---|
-| audio | mp3, m4a, wav, ogg | 20MB |
-| ảnh | jpg, jpeg, png, webp | 5MB |
+| JPEG | `FF D8 FF` | `jpg` (`jpeg` coi là `jpg`) |
+| PNG | `89 50 4E 47 0D 0A 1A 0A` | `png` |
+| WebP | `RIFF` ở byte 0-3 và `WEBP` ở byte 8-11 | `webp` |
+| MP3 | `ID3`, hoặc khung MPEG (byte 0 = `FF`, ba bit cao của byte 1 bằng 1) | `mp3` |
+| M4A | `ftyp` ở byte 4-7 | `m4a` |
+| WAV | `RIFF` ở byte 0-3 và `WAVE` ở byte 8-11 | `wav` |
+| OGG | `OggS` | `ogg` |
+
+  Chữ ký phải thuộc đúng nhóm (ảnh hoặc âm thanh) và đuôi khai báo phải khớp loại nhận dạng. Không nhận dạng được: 400 `File content is not a valid audio file` (hoặc `image`). Khác đuôi: 400 `File content does not match its extension`. Đây chỉ là kiểm tra vài byte đầu, không phải bộ kiểm tra hợp lệ toàn diện.
 
 - Phục vụ file với Content-Type suy ra từ đuôi (không tin client), `X-Content-Type-Options: nosniff`, cache 30 ngày (tên UUID không bao giờ bị ghi đè).
 - **Dọn file gắn với transaction** (`TxCallbacks`):
@@ -391,8 +416,22 @@ Không có `ON DELETE CASCADE`, nên service dọn thủ công theo thứ tự (
 
 ## 11. Kiểm thử
 
-- **Tự động:** `./mvnw test` (cần Docker Desktop đang chạy). Testcontainers dựng Postgres sạch, Flyway chạy V1 và V2, `ddl-auto: validate` xác nhận entity khớp schema. Test gọi API thật qua `HttpClient` trên cổng ngẫu nhiên, mỗi test tự tạo user và dữ liệu tên ngẫu nhiên. **77 test**, gồm cả ca đồng thời (race): thêm bài playlist, follow, favorite.
-- **Thủ công:** `requests.http` (VS Code, extension REST Client), 69 phần, 515 request, mỗi request có mã và kết quả kỳ vọng.
+- **Tự động:** `./mvnw test` (cần Docker Desktop đang chạy). Testcontainers dựng Postgres sạch, Flyway chạy V1 và V2, `ddl-auto: validate` xác nhận entity khớp schema. Test gọi API thật qua `HttpClient` trên cổng ngẫu nhiên, mỗi test tự tạo user và dữ liệu tên ngẫu nhiên. **93 test**, gồm cả ca đồng thời (race): thêm bài playlist, follow, favorite.
+
+  | Class | Số test |
+  |---|---|
+  | AuthSecurityTest | 23 |
+  | PlaylistTest | 13 |
+  | UploadTest | 17 |
+  | FollowTest | 9 |
+  | SongTest | 9 |
+  | FavoriteTest | 7 |
+  | RecentlyPlayedTest | 6 |
+  | FileSignatureTest | 6 |
+  | TimeZoneTest | 3 |
+
+- **CI:** GitHub Actions chạy toàn bộ test và build image Docker mỗi lần push.
+- **Thủ công:** `requests.http` (VS Code, extension REST Client), 70 phần, 518 request, mỗi request có mã và kết quả kỳ vọng.
 - Các bảo đảm quan trọng đều đã được kiểm chứng bằng cách **phá code cố ý** để thấy test fail (xem `docs/PROGRESS.md`).
 
 ---
@@ -410,16 +449,36 @@ Không có `ON DELETE CASCADE`, nên service dọn thủ công theo thứ tự (
 | Schema | `ddl-auto: update` | Flyway + `validate` | Schema có phiên bản, test được |
 | Danh sách Artist/Album | không nói rõ | trả toàn bộ (chưa phân trang) | Dữ liệu ít, để dành làm sau |
 | Genre trùng tên | không nói rõ | không phân biệt hoa/thường (ứng dụng + unique index `LOWER(name)`) | Tránh "Pop" và "pop" |
+| Username | không quy định | không chứa `@` hoặc khoảng trắng | Tránh trùng với email, filter tra user không bị nhập nhằng |
+| Tra user từ token | username hoặc email | `findByUsername` (subject của token là username) | Tránh hai dòng khớp |
+| Cấu hình DB | cố định trong `application.yml` | `DB_URL`, `DB_USER`, `DB_PASSWORD` đọc từ môi trường | Chạy được trong Docker |
+| Kiểm tra sức khỏe | không có | `/actuator/health` công khai, chỉ mở health | Healthcheck của Docker |
+| Thời gian | giờ máy chủ | UTC (hợp đồng, `configureTimeZone()`) | Nhất quán giữa máy local, Docker và client |
+| Lỗi 403 | định dạng mặc định của Spring | JSON `{timestamp, status, message}` | Client chỉ cần một cách đọc lỗi |
+| Kiểm tra file | đuôi và Content-Type | thêm chữ ký byte đầu | Chặn file giả đổi đuôi |
+| Triển khai | chạy tay | Docker Compose | Chạy từ máy trống bằng một lệnh |
+| CI | không có | GitHub Actions | Khóa lại toàn bộ test |
 
 ---
 
 ## 13. Giới hạn đã biết
 
-- Refresh token **không thu hồi được** trước hạn và không rotate. Muốn thu hồi cần bảng lưu refresh token.
+- Refresh token **không thu hồi được** trước hạn và không rotate. Muốn thu hồi cần bảng lưu refresh token (migration V3).
 - Chưa có endpoint logout phía server, chưa có rate limiting, chưa cấu hình CORS (app Android native không cần, web client thì cần).
-- Kiểm tra file chỉ dựa trên đuôi và Content-Type, chưa kiểm tra nội dung thật (magic bytes).
-- Response 403 do Spring Security không cùng định dạng JSON với các lỗi khác.
-- Sắp xếp theo `title` phụ thuộc collation của PostgreSQL (tiếng Việt có dấu có thể không đúng như mong đợi).
-- Tìm kiếm không bỏ dấu tiếng Việt.
-- File lưu local trên server (chưa có object storage).
+- Kiểm tra file chỉ nhìn vài byte đầu: một file bắt đầu bằng `ID3` rồi chứa nội dung tùy ý vẫn qua; một số ít file mp3 hợp lệ có thể bắt đầu bằng byte khác và bị từ chối.
+- Lỗi 401 do thiếu hoặc sai token vẫn có body rỗng (chưa thống nhất thành JSON như 403).
+- Thời gian là `LocalDateTime` không múi giờ, quy ước là UTC. Đổi sang `Instant` hoặc `timestamptz` cần migration V3. Dữ liệu ghi trước khi có quy ước này trên DB dev (giờ máy) bị lệch múi giờ.
+- Sắp xếp theo `title` phụ thuộc collation của PostgreSQL (tiếng Việt có dấu có thể không đúng như mong đợi). Tìm kiếm không bỏ dấu tiếng Việt.
+- File lưu local (volume Docker `uploads`), chưa có object storage và chưa có sao lưu tự động.
 - `GET /api/artists` và `/api/albums` chưa phân trang.
+- Docker Compose dùng tài khoản superuser `postgres`, chưa có HTTPS (cần reverse proxy khi triển khai thật), chạy một node.
+
+---
+
+## 14. Triển khai bằng Docker
+
+- **Dockerfile** (hai giai đoạn): giai đoạn build dùng `maven:3.9-eclipse-temurin-21` (dùng `mvn` của image, không dùng `mvnw` để tránh vấn đề CRLF và quyền thực thi trên Windows), bỏ test (`-DskipTests`) vì test cần Docker; giai đoạn chạy dùng `eclipse-temurin:21-jre-alpine`, chạy bằng user thường `app` (không phải root), `JAVA_TOOL_OPTIONS` có `-Duser.timezone=UTC`.
+- **docker-compose.yml:** dịch vụ `db` (`postgres:17-alpine`, healthcheck `pg_isready`, volume `pgdata`, không mở cổng ra máy chủ) và `app` (đợi `db` healthy, profile `prod`, cổng 8080, volume `uploads` gắn vào `/app/uploads`, healthcheck gọi `/actuator/health`, `restart: unless-stopped`).
+- **Cấu hình:** `.env` (không commit) khai `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`; thiếu biến bắt buộc thì compose dừng với thông báo rõ. Biến của shell ghi đè `.env`. `.env.example` được commit làm mẫu.
+- **Vận hành:** `docker compose down` giữ dữ liệu, `down -v` xóa cả DB lẫn file upload. Đổi `DB_PASSWORD` sau khi volume `pgdata` đã tạo sẽ làm app không kết nối được (Postgres chỉ nhận mật khẩu lúc khởi tạo). Đổi `JWT_SECRET` làm mọi token đang sống mất hiệu lực.
+- **Đã kiểm chứng:** schema do Flyway tạo trên DB trống (V1, V2), health `UP`, tiến trình chạy bằng user không phải root, volume giữ dữ liệu và file qua `down`/`up`, Range trả 206, app Android dùng được qua `10.0.2.2:8080`.
